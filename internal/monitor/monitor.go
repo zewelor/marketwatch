@@ -59,12 +59,33 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 	present := map[string]bool{}
 	for _, rule := range rules {
 		present[rule.ID] = true
+	}
+	// Version-2 state may still use manually named keys. Preserve matching
+	// definitions, but never silently choose between conflicting entries.
+	rekeyed := make(map[string]*RuleState, len(state.Rules))
+	for id, old := range state.Rules {
+		key := id
+		if present[old.Fingerprint] {
+			key = old.Fingerprint
+		}
+		if rekeyed[key] != nil {
+			return fmt.Errorf("ambiguous state entries for rule fingerprint %s; state left unchanged", key)
+		}
+		rekeyed[key] = old
+	}
+	for id, old := range state.Rules {
+		if present[old.Fingerprint] && id != old.Fingerprint {
+			r.Logger.Info("rule_id_migrated", "previous_rule_id", id, "rule_id", old.Fingerprint, "dry_run", opts.DryRun)
+		}
+	}
+	state.Rules = rekeyed
+	for _, rule := range rules {
 		old := state.Rules[rule.ID]
-		if old == nil || old.Fingerprint != rule.fingerprint() {
+		if old == nil || old.Fingerprint != rule.ID {
 			if old != nil {
 				r.Logger.Warn("rule_reset", "rule_id", rule.ID, "pending_lost", old.Pending != nil)
 			}
-			state.Rules[rule.ID] = &RuleState{Fingerprint: rule.fingerprint()}
+			state.Rules[rule.ID] = &RuleState{Fingerprint: rule.ID}
 		}
 	}
 	for id, old := range state.Rules {
@@ -131,7 +152,7 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 			rs.Pending = render(rule, q)
 			created++
 		}
-		r.Logger.Info("rule_evaluated", "source", coinLore.Name, "rule_id", rule.ID, "coin", rule.Coin, "currency", "USD", "price", q.price, "window", rule.Window, "value", value, "fetched_at", q.fetchedAt, "decision", decision, "active", rs.Active, "pending", rs.Pending != nil, "dry_run", opts.DryRun)
+		r.Logger.Info("rule_evaluated", "source", coinLore.Name, "rule_id", rule.ID, "coin", rule.Coin, "currency", "USD", "condition", rule.Condition, "threshold", rule.Threshold, "price", q.price, "window", rule.Window, "value", value, "fetched_at", q.fetchedAt, "decision", decision, "active", rs.Active, "pending", rs.Pending != nil, "dry_run", opts.DryRun)
 	}
 	if opts.DryRun {
 		for _, rule := range rules {
@@ -184,7 +205,7 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 }
 
 func render(rule Rule, q quote) *Pending {
-	message := fmt.Sprintf("Rule %s: condition observed\nCoinLore ID %s; price %g USD\nCondition: ", rule.ID, rule.Coin, q.price)
+	message := fmt.Sprintf("CoinLore: condition observed\nCoinLore ID %s; price %g USD\nCondition: ", rule.Coin, q.price)
 	switch rule.Condition {
 	case "above":
 		message += fmt.Sprintf("price >= %g USD", rule.Threshold)
