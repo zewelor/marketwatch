@@ -10,7 +10,6 @@ The YAML root contains a nonempty `rules` list. Each rule has:
 
 | Field | Requirement |
 | --- | --- |
-| `id` | Unique, stable, nonblank string of at most 128 characters |
 | `coin` | Case-insensitive symbol such as `btc`, or quoted positive numeric CoinLore ID |
 | `threshold` | Positive, finite percentage movement in either direction |
 | `above` | Positive, finite USD price; triggers at price >= value |
@@ -21,14 +20,20 @@ Each rule contains exactly one of `threshold`, `above` or `below`. Null, missing
 combined or invalid conditions are errors. Price rules do not measure a change in USD.
 
 All rules are validated before network requests or state writes. Unknown fields,
-duplicate keys or rule IDs, multiple YAML documents, invalid values and unsupported
-windows are errors. Symbols resolve through the embedded CoinLore catalog before
-I/O. Unknown or ambiguous symbols fail with an explicit error; ambiguous symbols
-require a quoted numeric ID. IDs are normalized by removing leading zeros and deduplicated before
-fetching. Coin existence is determined by the ticker response. `kind` is unsupported.
+duplicate keys or canonical rule definitions, multiple YAML documents, invalid
+values and unsupported windows are errors. Symbols resolve through the embedded
+CoinLore catalog before I/O. Unknown or ambiguous symbols fail with an explicit
+error; ambiguous symbols require a quoted numeric ID. CoinLore IDs are normalized
+by removing leading zeros and deduplicated before fetching. Coin existence is
+determined by the ticker response. `kind` and rule `id` are unsupported.
 The catalog is updated from CoinLore `/api/assets/` with `just update-coins` or
 the weekly/manual GitHub Actions workflow, which proposes changes in one PR.
 Checks do not fetch a catalog or silently select the highest-ranked duplicate symbol.
+
+Each rule's internal ID is the full hexadecimal SHA-256 fingerprint of its
+canonical definition. Equivalent numeric spellings and coin aliases identify the
+same rule. Identical definitions are rejected before I/O; multiple different
+thresholds for one coin and condition are valid independent rules.
 
 Currency is fixed to USD. Source, endpoints, timeouts and notification channel are
 fixed in code. Non-dry-run checks require both Pushover credential variables.
@@ -115,18 +120,24 @@ not logged.
 
 Version 2 contains `version` and a `rules` map keyed by rule ID. Each entry stores
 `fingerprint`, `active` and optional `pending` with `observed_at` and `message`.
-The fingerprint includes source, currency, canonical coin ID, condition semantics,
-threshold, window and margin. Percentage-rule fingerprints remain unchanged when
+The key is the rule's full fingerprint. The fingerprint includes source, currency,
+canonical coin ID, condition semantics, threshold, window and margin.
+Percentage-rule fingerprints remain unchanged when
 adding price-rule support. YAML order, comments and leading zeros in IDs do not affect it.
 
-Changing from old directional rules resets activity and discards old pending
-messages with a warning, because the fingerprint changes. Changed definitions
-reset only the affected rule and remove its pending with a
-warning. Removed rules are deleted with the same warning. A new definition starts
-inactive. Reordering unchanged definitions preserves activity and pending.
+Changing from old directional rules or changing a definition creates a new key:
+the old rule is removed, discarding its pending with a warning, and the new
+definition starts inactive. Removed rules are deleted with the same warning.
+Reordering unchanged definitions preserves activity and pending.
+
+Valid version-2 state with manually named keys is rekeyed by matching fingerprints
+to configured definitions. Activity and the exact pending message and observation
+time are preserved, including during a market outage. The transition is logged.
+If multiple entries would map to one key, the check fails before HTTP and leaves
+the state file unchanged. Dry-run previews rekeying without saving it.
 
 A missing state file starts empty. Unreadable, empty, malformed, incomplete or
-unsupported state fails before HTTP; the file is never silently reset or migrated.
+unsupported state fails before HTTP; the file is never silently reset.
 Version 1 is unsupported. Field names must match exactly and repeated JSON keys
 are rejected.
 

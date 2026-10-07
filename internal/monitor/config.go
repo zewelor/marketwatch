@@ -20,7 +20,7 @@ const changeMargin = 0.5
 const priceMargin = 0.005
 
 type Rule struct {
-	ID        string  `yaml:"id"`
+	ID        string
 	Coin      string  `yaml:"coin"`
 	Threshold float64 `yaml:"threshold"`
 	Window    string  `yaml:"window,omitempty"`
@@ -59,7 +59,6 @@ func loadConfig(path string) ([]Rule, error) {
 	}
 	var wire struct {
 		Rules []struct {
-			ID        string    `yaml:"id"`
 			Coin      coinID    `yaml:"coin"`
 			Threshold yaml.Node `yaml:"threshold"`
 			Above     yaml.Node `yaml:"above"`
@@ -81,16 +80,9 @@ func loadConfig(path string) ([]Rule, error) {
 	}
 	seen := map[string]bool{}
 	rules := make([]Rule, 0, len(wire.Rules))
-	for _, w := range wire.Rules {
-		if strings.TrimSpace(w.ID) == "" || len([]rune(w.ID)) > 128 {
-			return nil, errors.New("rule id must contain 1–128 characters")
-		}
-		if seen[w.ID] {
-			return nil, fmt.Errorf("duplicate rule id %q", w.ID)
-		}
-		seen[w.ID] = true
+	for index, w := range wire.Rules {
 		if w.Coin == "" {
-			return nil, fmt.Errorf("rule %q: missing coin", w.ID)
+			return nil, fmt.Errorf("rule %d: missing coin", index+1)
 		}
 		condition := ""
 		threshold := 0.0
@@ -102,34 +94,40 @@ func loadConfig(path string) ([]Rule, error) {
 				continue
 			}
 			if condition != "" {
-				return nil, fmt.Errorf("rule %q: specify exactly one of threshold, above or below", w.ID)
+				return nil, fmt.Errorf("rule %d: specify exactly one of threshold, above or below", index+1)
 			}
 			condition = field.name
 			if field.node.Kind != yaml.ScalarNode || (field.node.ShortTag() != "!!int" && field.node.ShortTag() != "!!float") {
-				return nil, fmt.Errorf("rule %q: condition must be a positive finite number", w.ID)
+				return nil, fmt.Errorf("rule %d: condition must be a positive finite number", index+1)
 			}
 			if err := field.node.Decode(&threshold); err != nil || math.IsNaN(threshold) || math.IsInf(threshold, 0) || threshold <= 0 {
-				return nil, fmt.Errorf("rule %q: condition must be a positive finite number", w.ID)
+				return nil, fmt.Errorf("rule %d: condition must be a positive finite number", index+1)
 			}
 		}
 		if condition == "" {
-			return nil, fmt.Errorf("rule %q: specify exactly one of threshold, above or below", w.ID)
+			return nil, fmt.Errorf("rule %d: specify exactly one of threshold, above or below", index+1)
 		}
 		window := ""
 		if w.Window.Kind != 0 {
 			if w.Window.Kind != yaml.ScalarNode || w.Window.ShortTag() != "!!str" {
-				return nil, fmt.Errorf("rule %q: window must be text", w.ID)
+				return nil, fmt.Errorf("rule %d: window must be text", index+1)
 			}
 			window = w.Window.Value
 		}
 		if condition == "absolute-change" {
 			if window != "24h" && window != "7d" {
-				return nil, fmt.Errorf("rule %q: window must be 24h or 7d", w.ID)
+				return nil, fmt.Errorf("rule %d: window must be 24h or 7d", index+1)
 			}
 		} else if w.Window.Kind != 0 {
-			return nil, fmt.Errorf("rule %q: price rule cannot have window", w.ID)
+			return nil, fmt.Errorf("rule %d: price rule cannot have window", index+1)
 		}
-		rules = append(rules, Rule{ID: w.ID, Coin: string(w.Coin), Threshold: threshold, Window: window, Condition: condition})
+		rule := Rule{Coin: string(w.Coin), Threshold: threshold, Window: window, Condition: condition}
+		rule.ID = rule.fingerprint()
+		if seen[rule.ID] {
+			return nil, fmt.Errorf("rule %d: duplicate rule definition", index+1)
+		}
+		seen[rule.ID] = true
+		rules = append(rules, rule)
 	}
 	return rules, nil
 }

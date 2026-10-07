@@ -18,7 +18,7 @@ building arm64 is not a runtime arm64 test.
 
 | Area | Covered failure or behavior |
 | --- | --- |
-| Configuration | Invalid YAML, duplicate/unknown fields, invalid IDs, rules, thresholds, or windows fail before network or state I/O. |
+| Configuration | Invalid YAML, duplicate/unknown fields, explicit rule IDs, duplicate canonical definitions, invalid coins, conditions or windows fail before network or state I/O. |
 | Market data | HTTP errors, timeout, cancellation, malformed JSON, missing/duplicate IDs, invalid price, and independently missing or invalid change fields. |
 | Rules | Inclusive trigger limits, strict rearm margins, repeated episodes, ID canonicalization, rule ordering, and definition changes. |
 | Pending delivery | Retry after send failure, retry while CoinLore is unavailable, rearm retaining pending, new episodes replacing pending, and expiry at three hours. |
@@ -103,3 +103,23 @@ Validate workflow structure locally and prove publish/cleanup permissions and
 anonymous native pull on GHCR. Two comparable Actions runs are needed to prove
 Buildx cache reuse. No new application state transitions or concurrency are
 introduced; existing E2E is sufficient and model/formal methods remain deferred.
+
+## Automatic rule fingerprints
+
+Before implementation, account for rule reordering, symbol case and numeric-ID
+aliases, equivalent numeric spellings, different thresholds on the same coin,
+duplicate canonical definitions, changes to one rule, and legacy version-2 state
+with manual keys. Generated IDs reuse the full existing definition fingerprint;
+no rule ID is accepted in YAML. Unchanged definitions must preserve independent
+activity and pending messages across restart and reordering. Changed definitions
+start a new rule; removed state and its pending are discarded with a warning.
+
+Rekey valid legacy state by matching fingerprints before evaluation. Preserve
+the exact pending message and observation time. If multiple entries would map
+to the same key, fail before HTTP without overwriting the state; never choose
+one pending message silently. Dry-run previews rekeying without writing.
+Sequence E2E must cover migration, retry during market failure, dry-run,
+ambiguous legacy state and independent multiple thresholds. Property/model-based
+testing could explore more permutations, but these finite identity and migration
+cases are covered explicitly; formal methods remain deferred because locking
+and delivery guarantees are unchanged.

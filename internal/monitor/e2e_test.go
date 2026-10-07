@@ -156,21 +156,25 @@ func (h *harness) sent(n int) {
 }
 
 const fourRules = `rules:
-  - {id: high, coin: btc, above: 100}
-  - {id: low, coin: "80", below: 50}
-  - {id: day, coin: "90", threshold: 5, window: 24h}
-  - {id: week, coin: "80", threshold: 10, window: 7d}
+  - {coin: btc, above: 100}
+  - {coin: "80", below: 50}
+  - {coin: "90", threshold: 5, window: 24h}
+  - {coin: "80", threshold: 10, window: 7d}
 `
 const oneRule = `rules:
-  - {id: high, coin: "90", threshold: 5, window: 24h}
+  - {coin: "90", threshold: 5, window: 24h}
 `
+
+func ruleKey(coin, condition string, threshold float64, window string) string {
+	return (Rule{Coin: coin, Condition: condition, Threshold: threshold, Window: window}).fingerprint()
+}
 
 func TestE2EEpisodes(t *testing.T) {
 	h := newHarness(t, fourRules)
 	h.prices("100", "5", "0", "50", "0", "-10")
 	h.beforePush = func() {
 		s := h.state()
-		if s.Version != 2 || !s.Rules["high"].Active || !s.Rules["week"].Active {
+		if s.Version != 2 || !s.Rules[ruleKey("90", "above", 100, "")].Active || !s.Rules[ruleKey("80", "absolute-change", 10, "7d")].Active {
 			t.Error("all evaluations must persist before first send")
 		}
 	}
@@ -215,7 +219,7 @@ func TestE2EEpisodes(t *testing.T) {
 		t.Error("later episode must describe an observation")
 	}
 	// YAML order and canonical spelling do not reset.
-	h.config("rules:\n - {id: week, coin: \"80\", threshold: 10, window: 7d}\n - {id: day, coin: \"90\", threshold: 5, window: 24h}\n - {id: low, coin: \"80\", below: 50}\n - {id: high, coin: \"90\", above: 100}\n")
+	h.config("rules:\n - {coin: \"80\", threshold: 10, window: 7d}\n - {coin: \"90\", threshold: 5, window: 24h}\n - {coin: \"80\", below: 50}\n - {coin: \"90\", above: 100}\n")
 	h.run(false)
 	h.sent(8)
 }
@@ -225,19 +229,20 @@ func TestE2EPendingSequences(t *testing.T) {
 	h.pushStatus = 503
 	h.run(true)
 	h.sent(1)
-	original := h.state().Rules["high"].Pending.Message
+	key := ruleKey("90", "absolute-change", 5, "24h")
+	original := h.state().Rules[key].Pending.Message
 	h.now = h.now.Add(time.Hour)
 	h.prices("99", "0", "0", "50", "0", "0")
 	h.run(true)
 	h.sent(2)
-	if h.state().Rules["high"].Active || h.state().Rules["high"].Pending == nil {
+	if h.state().Rules[key].Active || h.state().Rules[key].Pending == nil {
 		t.Fatal("rearm removed pending")
 	}
 	h.now = h.now.Add(time.Hour)
 	h.prices("101", "-5", "0", "50", "0", "0")
 	h.run(true)
 	h.sent(3)
-	p := h.state().Rules["high"].Pending
+	p := h.state().Rules[key].Pending
 	if p.Message == original || !p.ObservedAt.Equal(h.now) || !strings.Contains(h.logs.String(), "pending_replaced") {
 		t.Fatal("new episode did not replace pending")
 	}
@@ -246,7 +251,7 @@ func TestE2EPendingSequences(t *testing.T) {
 	h.now = h.now.Add(time.Hour)
 	h.run(true)
 	h.sent(4)
-	if h.messages[3].Get("message") != p.Message || h.messages[3].Get("title") != "Marketwatch" || h.state().Rules["high"].Pending != nil {
+	if h.messages[3].Get("message") != p.Message || h.messages[3].Get("title") != "Marketwatch" || h.state().Rules[key].Pending != nil {
 		t.Fatal("retry must use persisted message and save success despite market failure")
 	}
 	h.marketStatus = 200
@@ -274,7 +279,7 @@ func TestE2EExpiryAndConfigChange(t *testing.T) {
 		}
 	}
 	h.pushStatus = 200
-	h.config("rules:\n - {id: high, coin: \"90\", threshold: 4, window: 24h}\n - {id: day, coin: \"90\", threshold: 5, window: 24h}\n")
+	h.config("rules:\n - {coin: \"90\", threshold: 4, window: 24h}\n - {coin: \"90\", threshold: 5, window: 24h}\n")
 	h.run(false)
 	h.sent(2)
 	if len(h.state().Rules) != 2 || !strings.Contains(h.messages[1].Get("message"), "condition observed") {
@@ -299,7 +304,7 @@ func TestE2EPartialData(t *testing.T) {
 	}
 	// 0% is a valid change, not missing; both directions on both windows.
 	t.Run("zero_and_other_windows", func(t *testing.T) {
-		h := newHarness(t, "rules:\n - {id: down-day, coin: \"90\", threshold: 5, window: 24h}\n - {id: up-week, coin: \"80\", threshold: 10, window: 7d}\n")
+		h := newHarness(t, "rules:\n - {coin: \"90\", threshold: 5, window: 24h}\n - {coin: \"80\", threshold: 10, window: 7d}\n")
 		h.prices("100", "0", "0", "50", "0", "0")
 		h.run(false)
 		h.sent(0)
@@ -312,6 +317,11 @@ func TestE2EPartialData(t *testing.T) {
 func TestE2EInvalidConfigBeforeIO(t *testing.T) {
 	cases := []string{
 		"rules: []",
+		strings.Replace(oneRule, "threshold: 5", "threshold: 5, id: old-name", 1),
+		strings.Replace(oneRule, "threshold: 5", "threshold: 5, id: 123", 1),
+		strings.Replace(oneRule, "threshold: 5", "threshold: 5, id: true", 1),
+		strings.Replace(oneRule, "threshold: 5", "threshold: 5, id: null", 1),
+		strings.Replace(oneRule, "threshold: 5", "threshold: 5, id: [high]", 1),
 		strings.Replace(oneRule, "threshold: 5", "threshold: .inf", 1),
 		strings.Replace(oneRule, "threshold: 5", "threshold: 0", 1),
 		strings.Replace(oneRule, "coin: \"90\"", "coin: 90", 1),
@@ -322,7 +332,7 @@ func TestE2EInvalidConfigBeforeIO(t *testing.T) {
 		strings.Replace(oneRule, "threshold: 5", "threshold: 5, currency: USD", 1),
 		strings.Replace(oneRule, "threshold: 5", "threshold: 5, threshold: 6", 1),
 		oneRule + "---\n" + oneRule,
-		oneRule + "  - {id: high, coin: \"80\", threshold: 1, window: 7d}\n",
+		"rules:\n - {coin: btc, threshold: 5, window: 24h}\n - {coin: \"90\", threshold: 5, window: 24h}\n",
 	}
 	for i, c := range cases {
 		t.Run(fmt.Sprint(i), func(t *testing.T) {
@@ -467,7 +477,7 @@ func TestE2EStateAndDryRun(t *testing.T) {
 		h := newHarness(t, oneRule)
 		h.pushResult = 0
 		h.run(true)
-		if h.state().Rules["high"].Pending == nil {
+		if h.state().Rules[ruleKey("90", "absolute-change", 5, "24h")].Pending == nil {
 			t.Fatal("status zero treated as accepted")
 		}
 	})
@@ -610,7 +620,7 @@ func TestE2EInvalidMinimalState(t *testing.T) {
 			if err := json.Unmarshal(original, &state); err != nil {
 				t.Fatal(err)
 			}
-			rule := state["rules"].(map[string]any)["high"].(map[string]any)
+			rule := state["rules"].(map[string]any)[ruleKey("90", "absolute-change", 5, "24h")].(map[string]any)
 			pending := rule["pending"].(map[string]any)
 			switch variant {
 			case "legacy":
@@ -661,7 +671,7 @@ func TestE2ECombinedFailureAndRestart(t *testing.T) {
 	h.pushStatus = 503
 	h.run(true)
 	h.sent(3)
-	if r := h.state().Rules["week"]; r.Active || r.Pending != nil {
+	if r := h.state().Rules[ruleKey("80", "absolute-change", 10, "7d")]; r.Active || r.Pending != nil {
 		t.Fatal("missing 7d changed the rule")
 	}
 	h.now = h.now.Add(time.Hour)
@@ -682,10 +692,10 @@ func TestE2ECombinedFailureAndRestart(t *testing.T) {
 	h.now = h.now.Add(30 * time.Minute)
 	h.run(false)
 	h.sent(14)
-	h.config("rules:\n - {id: high, coin: \"90\", above: 100}\n - {id: day, coin: \"90\", threshold: 7, window: 24h}\n")
+	h.config("rules:\n - {coin: \"90\", above: 100}\n - {coin: \"90\", threshold: 7, window: 24h}\n")
 	h.run(false)
 	h.sent(14)
-	if len(h.state().Rules) != 2 || h.state().Rules["day"].Active {
+	if len(h.state().Rules) != 2 || h.state().Rules[ruleKey("90", "absolute-change", 7, "24h")].Active {
 		t.Fatal("definition reconciliation after restart")
 	}
 }
@@ -703,13 +713,14 @@ func TestE2EHTTPTimeout(t *testing.T) {
 	h.pushStatus = 200
 	h.run(true)
 	h.sent(2)
-	if h.state().Rules["high"].Pending != nil {
+	if h.state().Rules[ruleKey("90", "absolute-change", 5, "24h")].Pending != nil {
 		t.Fatal("market timeout blocked retry")
 	}
 }
 
 func TestE2EBidirectionalMovement(t *testing.T) {
-	h := newHarness(t, "rules:\n - {id: move, coin: BTC, threshold: 3, window: 24h}\n")
+	h := newHarness(t, "rules:\n - {coin: BTC, threshold: 3, window: 24h}\n")
+	key := ruleKey("90", "absolute-change", 3, "24h")
 	for i, step := range []struct {
 		change string
 		sent   int
@@ -723,7 +734,7 @@ func TestE2EBidirectionalMovement(t *testing.T) {
 		h.prices("100", step.change, "0", "50", "0", "0")
 		h.run(false)
 		h.sent(step.sent)
-		if h.state().Rules["move"].Active != step.active {
+		if h.state().Rules[key].Active != step.active {
 			t.Fatalf("step %d: wrong activity", i)
 		}
 	}
@@ -733,13 +744,14 @@ func TestE2EBidirectionalMovement(t *testing.T) {
 }
 
 func TestE2ESmallMovementRearmsAtZero(t *testing.T) {
-	h := newHarness(t, "rules:\n - {id: move, coin: eth, threshold: 0.3, window: 7d}\n")
+	h := newHarness(t, "rules:\n - {coin: eth, threshold: 0.3, window: 7d}\n")
+	key := ruleKey("80", "absolute-change", 0.3, "7d")
 	h.prices("100", "0", "0", "50", "0", "0.3")
 	h.run(false)
 	h.sent(1)
 	h.prices("100", "0", "0", "50", "0", "0")
 	h.run(false)
-	if h.state().Rules["move"].Active {
+	if h.state().Rules[key].Active {
 		t.Fatal("small threshold did not rearm at zero")
 	}
 	h.prices("100", "0", "0", "50", "0", "-0.3")
@@ -749,10 +761,13 @@ func TestE2ESmallMovementRearmsAtZero(t *testing.T) {
 
 func TestE2EPriceAndPercentageEpisodes(t *testing.T) {
 	h := newHarness(t, `rules:
- - {id: high, coin: btc, above: 86000}
- - {id: low, coin: btc, below: 80000}
- - {id: move, coin: btc, threshold: 3, window: 24h}
+ - {coin: btc, above: 86000}
+ - {coin: btc, below: 80000}
+ - {coin: btc, threshold: 3, window: 24h}
 `)
+	highKey := ruleKey("90", "above", 86000, "")
+	lowKey := ruleKey("90", "below", 80000, "")
+	moveKey := ruleKey("90", "absolute-change", 3, "24h")
 	for i, step := range []struct {
 		price, change   string
 		sent            int
@@ -772,24 +787,25 @@ func TestE2EPriceAndPercentageEpisodes(t *testing.T) {
 		h.run(false)
 		h.sent(step.sent)
 		state := h.state()
-		if state.Rules["high"].Active != step.high || state.Rules["low"].Active != step.low || state.Rules["move"].Active != step.move {
+		if state.Rules[highKey].Active != step.high || state.Rules[lowKey].Active != step.low || state.Rules[moveKey].Active != step.move {
 			t.Fatalf("step %d: wrong activity", i)
 		}
 	}
 	if !strings.Contains(h.messages[0].Get("message"), "price >= 86000 USD") || !strings.Contains(h.messages[2].Get("message"), "price <= 80000 USD") {
 		t.Fatal("missing price condition")
 	}
-	// Changing condition preserves unchanged percentage activity and resets high only.
-	before := h.state().Rules["move"].Fingerprint
+	// Changing the high definition preserves the unchanged percentage activity.
+	before := h.state().Rules[moveKey].Fingerprint
 	h.config(`rules:
- - {id: high, coin: btc, threshold: 4, window: 24h}
- - {id: low, coin: btc, below: 80000}
- - {id: move, coin: btc, threshold: 3, window: 24h}
+ - {coin: btc, threshold: 4, window: 24h}
+ - {coin: btc, below: 80000}
+ - {coin: btc, threshold: 3, window: 24h}
 `)
 	h.run(false)
 	h.sent(6)
 	state := h.state()
-	if state.Rules["high"].Active || !state.Rules["move"].Active || state.Rules["move"].Fingerprint != before || !strings.Contains(h.logs.String(), "rule_reset") {
+	newMoveKey := ruleKey("90", "absolute-change", 4, "24h")
+	if state.Rules[newMoveKey].Active || !state.Rules[moveKey].Active || state.Rules[moveKey].Fingerprint != before || !strings.Contains(h.logs.String(), "rule_removed") || strings.Contains(h.logs.String(), "rule_reset") {
 		t.Fatal("condition reconciliation")
 	}
 }
@@ -801,7 +817,7 @@ func TestE2EInvalidPriceConditionsBeforeIO(t *testing.T) {
 		"above: 86000, window: 24h", "below: 80000, window: null", "",
 	} {
 		t.Run(fmt.Sprint(i), func(t *testing.T) {
-			h := newHarness(t, "rules:\n - {id: price, coin: btc, "+condition+"}\n")
+			h := newHarness(t, "rules:\n - {coin: btc, "+condition+"}\n")
 			h.run(true)
 			if h.gets != 0 {
 				t.Fatal("invalid condition used network")

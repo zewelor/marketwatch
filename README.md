@@ -46,15 +46,12 @@ GitHub schedules can be delayed and may be disabled in inactive public repositor
 
 ```yaml
 rules:
-  - id: btc-day
-    coin: btc
+  - coin: btc
     threshold: 3
     window: 24h
-  - id: btc-high
-    coin: btc
+  - coin: btc
     above: 86000
-  - id: btc-low
-    coin: btc
+  - coin: btc
     below: 80000
 ```
 
@@ -62,9 +59,13 @@ This alerts for both a rise of at least 3% and a fall of at least 3% over 24 hou
 Use `7d` for the provider's seven-day change. `above` alerts when price is >=
 86000 USD and `below` when price is <= 80000 USD, including equality. Each rule
 specifies exactly one of `threshold`, `above` or `below`; price rules omit `window`.
-There is no `kind` field.
+There is no `kind` or `id` field.
 
-Thresholds are positive numbers. Rule IDs must be unique and stable. See the
+Thresholds are positive numbers. Each rule gets an internal SHA-256 fingerprint
+from its canonical definition. Reordering rules or writing `BTC`, `btc` or `"90"`
+preserves their state. Identical definitions are rejected; different thresholds
+for the same coin are independent rules. Changing a definition creates a new rule
+and discards the old rule's state and pending notification with a warning. See the
 [example configuration](config/example.yaml) and [behavior specification](docs/spec.md).
 
 An alert fires when an inactive rule meets its condition, including the first
@@ -117,6 +118,11 @@ Valid rules continue to run when another rule has invalid market data.
 State format version 2 stores rule fingerprints, activity and pending messages.
 Invalid or unsupported state, including version 1, is rejected without resetting
 or overwriting the file. Do not remove the state or its lock while a check runs.
+
+When upgrading from manually named rule IDs, remove `id` from the YAML and retain
+the state file. Matching version-2 entries are rekeyed by fingerprint, preserving
+activity and pending messages. Multiple entries mapping to one key fail explicitly
+without overwriting the state. Dry-run previews this transition without saving it.
 
 ## Docker
 
