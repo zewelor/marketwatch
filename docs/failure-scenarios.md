@@ -83,3 +83,7 @@ changes resetting only the changed rule. Existing percentage fingerprints must
 remain stable. Sequence E2E covers the added transitions; property/model-based
 and formal methods remain deferred because storage/concurrency are unchanged
 and these explicit boundaries are covered without a new model to maintain.
+
+Artifact paths must use portable test case names. Avoid YAML condition text in
+subtest names: characters such as colon make GitHub artifact uploads fail even
+when tests pass. Invalid-condition cases use numeric names, as other config cases do.
