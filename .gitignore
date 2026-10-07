@@ -1,0 +1,6 @@
+/artifacts/
+/bin/
+/data/
+.env*
+__pycache__/
+*.py[cod]

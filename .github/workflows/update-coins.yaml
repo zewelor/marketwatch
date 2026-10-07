@@ -1,0 +1,63 @@
+name: Update coin catalog
+on:
+  schedule:
+    - cron: '17 6 * * 1' # Monday, 06:17 UTC
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: update-coins
+  cancel-in-progress: false
+jobs:
+  refresh:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Refresh catalog and verify resolution
+        run: |
+          python3 scripts/update-coins.py
+          go test ./internal/monitor -run '^TestResolveCoin' -count=1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coin-catalog
+          path: internal/monitor/coins.json
+          if-no-files-found: error
+          retention-days: 7
+  pull-request:
+    needs: refresh
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: coin-catalog
+          path: internal/monitor
+      - name: Create or update catalog PR
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        with:
+          add-paths: internal/monitor/coins.json
+          branch: automation/update-coins
+          commit-message: 'chore: update CoinLore catalog'
+          title: 'chore: update CoinLore catalog'
+          body: |
+            Refresh the embedded ID/symbol catalog from CoinLore `/api/assets/`.
+
+            Catalog parsing and symbol resolution passed in the refresh job.
+            Review the catalog diff and approve pending CI runs before merging.
+            Rebuild the binary or image after merging to use the updated catalog.

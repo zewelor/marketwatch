@@ -1,0 +1,17 @@
+# Illustrative thresholds. Set your own before using check.
+# Percentage rules alert for both positive and negative changes.
+rules:
+  - id: btc-day
+    coin: btc
+    threshold: 3
+    window: 24h
+  - id: eth-week
+    coin: eth
+    threshold: 10
+    window: 7d
+  - id: btc-high
+    coin: btc
+    above: 86000
+  - id: btc-low
+    coin: btc
+    below: 80000
