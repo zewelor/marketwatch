@@ -87,3 +87,19 @@ and these explicit boundaries are covered without a new model to maintain.
 Artifact paths must use portable test case names. Avoid YAML condition text in
 subtest names: characters such as colon make GitHub artifact uploads fail even
 when tests pass. Invalid-condition cases use numeric names, as other config cases do.
+
+## GHCR publication and retention
+
+Before implementation, account for fork/PR publication, failed verification or
+push, cancelled/overlapping main runs, registry permission failure, private
+package visibility, unsupported native binaries, broken multi-arch child
+manifests, accidental cleanup of `latest` or other packages, and artifact-only
+cleanup failures. Verification stays read-only; publication is a separate
+push-to-main job with package writes. Main runs are serialized through publication
+and cleanup. Cleanup runs only after a successful push, targets this repository's
+package, protects `latest`, and retains 10 other tagged plus 10 standalone
+untagged images; multi-arch children are handled together by the cleanup action.
+Validate workflow structure locally and prove publish/cleanup permissions and
+anonymous native pull on GHCR. Two comparable Actions runs are needed to prove
+Buildx cache reuse. No new application state transitions or concurrency are
+introduced; existing E2E is sufficient and model/formal methods remain deferred.

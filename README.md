@@ -120,6 +120,19 @@ or overwriting the file. Do not remove the state or its lock while a check runs.
 
 ## Docker
 
+Published images support Linux amd64 and arm64:
+
+```sh
+docker pull ghcr.io/zewelor/marketwatch:latest
+```
+
+Every successful push to `main` publishes `latest` and `sha-<full-commit-SHA>`.
+The workflow summary records the image digest; use `@sha256:…` to pin an exact
+image. After publication, cleanup preserves `latest`, the 10 newest other tagged
+images and 10 standalone untagged images, including the platform manifests of
+retained multi-arch images. Older commit tags can disappear through retention.
+The package must have public visibility in GitHub Packages for anonymous pulls.
+
 Build the local amd64 image with `just image`, or:
 
 ```sh
@@ -166,7 +179,9 @@ artifacts; `just e2e` keeps logs and state snapshots in `artifacts/e2e/`.
 
 CI runs the Go checks alongside Dockerfile lint, builds images for both
 architectures and uploads E2E artifacts. The catalog workflow opens update PRs;
-CI does not publish images.
+After successful verification of a push to `main`, a separate job publishes
+images to GHCR and cleans up older versions. Pull requests and other branches
+do not publish. Main runs finish publication and cleanup before the next begins.
 See [testing and failure scenarios](docs/failure-scenarios.md) for coverage and
 additional container checks.
 

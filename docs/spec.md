@@ -152,8 +152,17 @@ Exit 0 means no errors; exit 1 includes partial failures and expired pending.
 The Linux amd64/arm64 image uses a statically linked binary, CA certificates and
 UID/GID 65532. Real checks require a writable, persistent state directory and
 Pushover credentials supplied through environment variables. Operators provide
-their own scheduling and deployment. CI tests and builds; it does not publish
-or deploy. A separate weekly/manual catalog workflow creates update PRs; it does
+their own scheduling and deployment. CI tests and builds. After a successful
+push-to-main verification, a separate job with package-write permission publishes
+Linux amd64/arm64 images to GHCR as `latest` and `sha-<full-commit-SHA>`, and records
+the manifest digest. Other refs and pull requests do not publish. Main runs are
+serialized through publication and cleanup.
+
+Cleanup runs after successful publication, targets only this repository's package,
+and protects `latest`. It keeps the 10 newest other tagged images and 10 standalone
+untagged images with retained multi-arch children. Older commit tags are not
+permanent archives. The package is made public for anonymous pulls. Deployment is
+external. A separate weekly/manual catalog workflow creates update PRs; it does
 not merge them or publish binaries or images.
 
 For verification commands and coverage, see [failure scenarios](failure-scenarios.md).
