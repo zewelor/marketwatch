@@ -1,0 +1,50 @@
+name: verify
+on:
+  push:
+  pull_request:
+permissions: {}
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Format
+        run: test -z "$(gofmt -l cmd internal)"
+      # Go checks share a cache and remain sequential; Dockerfile lint is independent.
+      - parallel:
+          - name: Verify Go and build binaries
+            run: |
+              go vet ./...
+              mkdir -p artifacts/e2e
+              MARKETWATCH_ARTIFACT_DIR="$PWD/artifacts/e2e" go test -race ./... -count=1 -json > artifacts/e2e/results.jsonl
+              mkdir -p bin
+              CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o bin/marketwatch-amd64 ./cmd/marketwatch
+              CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o bin/marketwatch-arm64 ./cmd/marketwatch
+          - name: Dockerfile lint
+            uses: immanuwell/dockerfile-roast@1c87b2aa189338c24db4acde40864dae8994de8f # 1.7.0
+            with:
+              image-tag: 1.7.0@sha256:4f31be49f26804c0a2f8a0ab0ae578719e30376323e8fd5951c6dcc79a478b40
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: e2e
+          path: artifacts/e2e
+          if-no-files-found: error
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
