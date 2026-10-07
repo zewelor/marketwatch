@@ -795,12 +795,12 @@ func TestE2EPriceAndPercentageEpisodes(t *testing.T) {
 }
 
 func TestE2EInvalidPriceConditionsBeforeIO(t *testing.T) {
-	for _, condition := range []string{
+	for i, condition := range []string{
 		"above: 0", "below: -1", "above: .inf", "below: .nan", "above: null", "above: nope",
 		"above: 86000, below: 80000", "above: 86000, threshold: 3, window: 24h",
 		"above: 86000, window: 24h", "below: 80000, window: null", "",
 	} {
-		t.Run(condition, func(t *testing.T) {
+		t.Run(fmt.Sprint(i), func(t *testing.T) {
 			h := newHarness(t, "rules:\n - {id: price, coin: btc, "+condition+"}\n")
 			h.run(true)
 			if h.gets != 0 {
