@@ -1,10 +1,7 @@
 package monitor
 
 import (
-	"bytes"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -91,13 +88,12 @@ func writeLegacyState(t *testing.T, h *harness, rules map[string]*RuleState) []b
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Dir(h.options.StatePath), 0700); err != nil {
-		t.Fatal(err)
+	setPostgresTestStateJSON(t, data)
+	stored, exists := postgresTestStateJSON(t)
+	if !exists {
+		t.Fatal("seeded PostgreSQL state row is missing")
 	}
-	if err := os.WriteFile(h.options.StatePath, data, 0600); err != nil {
-		t.Fatal(err)
-	}
-	return data
+	return stored
 }
 
 func TestE2ELegacyRuleFingerprintMigration(t *testing.T) {
@@ -114,8 +110,8 @@ func TestE2ELegacyRuleFingerprintMigration(t *testing.T) {
 	h.options.DryRun = true
 	h.run(true)
 	h.sent(0)
-	afterPreview, err := os.ReadFile(h.options.StatePath)
-	if err != nil || !bytes.Equal(before, afterPreview) || !strings.Contains(h.logs.String(), "would_send") {
+	afterPreview, exists := postgresTestStateJSON(t)
+	if !exists || !postgresTestJSONEqual(t, before, afterPreview) || !strings.Contains(h.logs.String(), "would_send") {
 		t.Fatal("migration preview wrote state or lost pending")
 	}
 
@@ -148,8 +144,8 @@ func TestE2EAmbiguousLegacyFingerprints(t *testing.T) {
 			})
 			err := h.run(true)
 			h.sent(0)
-			after, readErr := os.ReadFile(h.options.StatePath)
-			if !strings.Contains(err.Error(), "ambiguous") || h.gets != 0 || readErr != nil || !bytes.Equal(before, after) {
+			after, exists := postgresTestStateJSON(t)
+			if !strings.Contains(err.Error(), "ambiguous") || h.gets != 0 || !exists || !postgresTestJSONEqual(t, before, after) {
 				t.Fatal("ambiguous legacy state used HTTP, was overwritten, or was not reported explicitly")
 			}
 		})

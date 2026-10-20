@@ -11,6 +11,21 @@ jobs:
   verify:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    services:
+      postgres:
+        image: >-
+          postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
+        env:
+          POSTGRES_DB: marketwatch_test
+          POSTGRES_USER: marketwatch_test
+          POSTGRES_PASSWORD: marketwatch_test
+        ports:
+          - 15432:5432
+        options: >-
+          --health-cmd "pg_isready -U marketwatch_test -d marketwatch_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     permissions:
       contents: read
     steps:
@@ -26,6 +41,14 @@ jobs:
       # Go checks share a cache and remain sequential; Dockerfile lint is independent.
       - parallel:
           - name: Verify Go and build binaries
+            env:
+              MARKETWATCH_TEST_POSTGRES: "1"
+              DB_HOST: 127.0.0.1
+              DB_PORT: "15432"
+              DB_NAME: marketwatch_test
+              DB_USER: marketwatch_test
+              DB_PASSWORD: marketwatch_test
+              DB_SSLMODE: disable
             run: |
               go vet ./...
               mkdir -p artifacts/e2e

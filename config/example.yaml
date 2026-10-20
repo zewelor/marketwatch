@@ -2,12 +2,11 @@
 # Percentage rules alert for both positive and negative changes.
 rules:
   - coin: btc
-    threshold: 3
+    threshold: 2
     window: 24h
   - coin: eth
-    threshold: 10
-    window: 7d
-  - coin: btc
-    above: 86000
-  - coin: btc
-    below: 80000
+    threshold: 3
+    window: 24h
+  - coin: doge
+    threshold: 4
+    window: 24h

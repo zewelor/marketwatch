@@ -13,12 +13,11 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
 
-// This harness exercises the production runner, real HTTP and on-disk state.
+// This harness exercises the production runner, real HTTP and disposable PostgreSQL state.
 // Only clock and HTTP destinations differ from CLI. Fixtures contain no secrets.
 type harness struct {
 	t                                    *testing.T
@@ -54,7 +53,8 @@ func newHarness(t *testing.T, config string) *harness {
 			t.Fatal(err)
 		}
 	}
-	h.options = Options{ConfigPath: filepath.Join(h.dir, "config.yaml"), StatePath: filepath.Join(h.dir, "data", "state.json"), Token: "fixture-token", User: "fixture-user"}
+	h.options = Options{ConfigPath: filepath.Join(h.dir, "config.yaml"), Token: "fixture-token", User: "fixture-user"}
+	resetPostgresTestState(t)
 	h.config(config)
 	market := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.gets++
@@ -121,7 +121,7 @@ func (h *harness) run(wantError bool) error {
 		}
 	}
 	artifact["logs"] = logs
-	if state, readErr := os.ReadFile(h.options.StatePath); readErr == nil {
+	if state, exists := postgresTestStateJSON(h.t); exists {
 		artifact["state"] = string(state)
 	}
 	b, marshalErr := json.MarshalIndent(artifact, "", "  ")
@@ -138,15 +138,7 @@ func (h *harness) run(wantError bool) error {
 }
 func (h *harness) state() State {
 	h.t.Helper()
-	data, err := os.ReadFile(h.options.StatePath)
-	if err != nil {
-		h.t.Fatal(err)
-	}
-	var state State
-	if err := json.Unmarshal(data, &state); err != nil {
-		h.t.Fatal(err)
-	}
-	return state
+	return postgresTestState(h.t)
 }
 func (h *harness) sent(n int) {
 	h.t.Helper()
@@ -341,14 +333,25 @@ func TestE2EInvalidConfigBeforeIO(t *testing.T) {
 			if h.gets != 0 {
 				t.Fatal("network before validation")
 			}
-			if _, err := os.Stat(filepath.Dir(h.options.StatePath)); !os.IsNotExist(err) {
-				t.Fatal("created state dir before validation")
+			if postgresTestStateTableExists(t) {
+				t.Fatal("created state table before validation")
 			}
 		})
 	}
 }
 
 func TestE2EStateAndDryRun(t *testing.T) {
+	t.Run("dry_run_requires_database_configuration", func(t *testing.T) {
+		h := newHarness(t, oneRule)
+		h.options.DryRun = true
+		envWithoutDatabaseSettings(t)
+		err := h.runner.Run(context.Background(), h.options)
+		h.sent(0)
+		if err == nil || !strings.Contains(err.Error(), "DB_HOST") || h.gets != 0 {
+			t.Fatalf("dry-run must report missing database configuration before HTTP; err=%v gets=%d", err, h.gets)
+		}
+	})
+
 	t.Run("dry_new", func(t *testing.T) {
 		h := newHarness(t, oneRule)
 		h.options.DryRun = true
@@ -356,8 +359,8 @@ func TestE2EStateAndDryRun(t *testing.T) {
 		h.options.User = ""
 		h.run(false)
 		h.sent(0)
-		if _, err := os.Stat(filepath.Dir(h.options.StatePath)); !os.IsNotExist(err) {
-			t.Fatal("dry-run mkdir")
+		if postgresTestStateTableExists(t) {
+			t.Fatal("dry-run created state table")
 		}
 		if !strings.Contains(h.logs.String(), "CoinLore") || !strings.Contains(h.logs.String(), "fetched_at") {
 			t.Fatal("dry-run missing source/time")
@@ -367,95 +370,88 @@ func TestE2EStateAndDryRun(t *testing.T) {
 		h := newHarness(t, oneRule)
 		h.pushStatus = 503
 		h.run(true)
-		before, _ := os.ReadFile(h.options.StatePath)
+		before, exists := postgresTestStateJSON(t)
+		if !exists {
+			t.Fatal("expected initialized state")
+		}
 		h.options.DryRun = true
 		h.options.Token = ""
 		h.options.User = ""
 		h.run(false)
-		after, _ := os.ReadFile(h.options.StatePath)
-		if !bytes.Equal(before, after) {
+		after, exists := postgresTestStateJSON(t)
+		if !exists || !postgresTestJSONEqual(t, before, after) {
 			t.Fatal("dry-run changed state")
 		}
 		h.sent(1)
 	})
-	for i, data := range []string{"", "{}", "{", "{\"version\":3,\"rules\":{}}", "{\"version\":2,\"rules\":null}", "{\"version\":2,\"rules\":{\"high\":{}}}", "{\"version\":2,\"version\":2,\"rules\":{}}"} {
+	t.Run("existing_table_missing_row", func(t *testing.T) {
+		h := newHarness(t, oneRule)
+		createEmptyPostgresTestState(t)
+		err := h.run(true)
+		h.sent(0)
+		if !strings.Contains(err.Error(), "singleton is missing") || h.gets != 0 {
+			t.Fatalf("missing singleton row must fail before HTTP; err=%v gets=%d", err, h.gets)
+		}
+		if !postgresTestStateTableExists(t) {
+			t.Fatal("corrupt state table was removed")
+		}
+	})
+	for i, data := range []string{"{}", "null", "[]", "{\"version\":3,\"rules\":{}}", "{\"version\":2,\"rules\":null}", "{\"version\":2,\"rules\":{\"high\":{}}}"} {
 		t.Run(fmt.Sprintf("corrupt_%d", i), func(t *testing.T) {
 			h := newHarness(t, oneRule)
-			if err := os.MkdirAll(filepath.Dir(h.options.StatePath), 0700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(h.options.StatePath, []byte(data), 0600); err != nil {
-				t.Fatal(err)
-			}
+			setPostgresTestStateJSON(t, []byte(data))
+			before, _ := postgresTestStateJSON(t)
 			h.run(true)
 			if h.gets != 0 {
 				t.Fatal("corrupt state used network")
 			}
-			after, _ := os.ReadFile(h.options.StatePath)
-			if string(after) != data {
+			after, exists := postgresTestStateJSON(t)
+			if !exists || !postgresTestJSONEqual(t, before, after) {
 				t.Fatal("corrupt state overwritten")
 			}
 		})
 	}
 	t.Run("lock", func(t *testing.T) {
 		h := newHarness(t, oneRule)
-		if err := os.MkdirAll(filepath.Dir(h.options.StatePath), 0700); err != nil {
-			t.Fatal(err)
-		}
-		f, err := os.OpenFile(h.options.StatePath+".lock", os.O_CREATE|os.O_RDWR, 0600)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer f.Close()
-		if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-			t.Fatal(err)
-		}
-		defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
-		h.run(true)
-		if h.gets != 0 {
+		acquireMarketwatchAdvisoryLock(t)
+		err := h.run(true)
+		if !strings.Contains(err.Error(), "state lock") || h.gets != 0 {
 			t.Fatal("conflicting check used network")
 		}
 		h.options.DryRun = true
 		h.run(false)
+		if h.gets != 1 {
+			t.Fatal("dry-run did not bypass the advisory lock")
+		}
 	})
 	t.Run("write_before_send", func(t *testing.T) {
 		h := newHarness(t, oneRule)
 		h.beforeMarket = func() {
-			if err := os.Mkdir(h.options.StatePath, 0700); err != nil {
-				t.Error(err)
-			}
+			terminateMarketwatchBackends(t)
 		}
-		h.run(true)
+		runErr := h.run(true)
 		h.sent(0)
-		if h.gets != 1 || !strings.Contains(h.logs.String(), "rule_evaluated") {
+		if !strings.Contains(runErr.Error(), "PostgreSQL") || h.gets != 1 || !strings.Contains(h.logs.String(), "rule_evaluated") {
 			t.Fatal("must fail after network/evaluation, before send")
+		}
+		if len(h.state().Rules) != 0 {
+			t.Fatal("failed evaluation save changed durable state")
 		}
 	})
 	t.Run("write_after_send", func(t *testing.T) {
 		h := newHarness(t, fourRules)
 		h.prices("100", "5", "0", "50", "0", "-10")
-		dataDir := filepath.Dir(h.options.StatePath)
-		backup := dataDir + "-backup"
 		h.beforePush = func() {
 			if len(h.messages) == 1 {
-				if err := os.Rename(dataDir, backup); err != nil {
-					t.Error(err)
-					return
-				}
-				if err := os.WriteFile(dataDir, []byte("obstruction"), 0600); err != nil {
-					t.Error(err)
-				}
+				terminateMarketwatchBackends(t)
 			}
 		}
-		h.run(true)
+		runErr := h.run(true)
 		h.sent(1)
+		if !strings.Contains(runErr.Error(), "PostgreSQL") {
+			t.Fatalf("database loss after the accepted send was not reported: %v", runErr)
+		}
 		h.beforePush = nil
-		if err := os.Remove(dataDir); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Rename(backup, dataDir); err != nil {
-			t.Fatal(err)
-		}
 		for _, r := range h.state().Rules {
 			if r.Pending == nil {
 				t.Fatal("pre-send state did not retain pending")
@@ -490,7 +486,7 @@ func TestCLISmoke(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v %s", err, out)
 	}
-	for _, args := range [][]string{{}, {"check", "--unknown"}, {"check", "--config", h.options.ConfigPath, "--state", h.options.StatePath, "--dry-run"}} {
+	for _, args := range [][]string{{}, {"check", "--unknown"}, {"check", "--config", h.options.ConfigPath, "--state", "legacy.json", "--dry-run"}} {
 		cmd = exec.Command(binary, args...)
 		out, err := cmd.CombinedOutput()
 		if err == nil {
@@ -512,64 +508,92 @@ func TestCLIEnvironment(t *testing.T) {
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v %s", err, out)
 	}
-	state := filepath.Join(h.dir, "corrupt-state.json")
-	alternate := filepath.Join(h.dir, "unsupported-state.json")
 	invalidConfig := filepath.Join(h.dir, "invalid-config.yaml")
-	for path, contents := range map[string]string{state: "{", alternate: `{"version":3,"rules":{}}`, invalidConfig: "rules: []"} {
-		if err := os.WriteFile(path, []byte(contents), 0600); err != nil {
-			t.Fatal(err)
+	if err := os.WriteFile(invalidConfig, []byte("rules: []"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	setPostgresTestStateJSON(t, []byte(`{"version":3,"rules":{}}`))
+	before, exists := postgresTestStateJSON(t)
+	if !exists {
+		t.Fatal("seeded PostgreSQL state row is missing")
+	}
+	dbEnvironment := map[string]string{}
+	for _, key := range []string{"DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD", "DB_SSLMODE"} {
+		if value, ok := os.LookupEnv(key); ok {
+			dbEnvironment[key] = value
 		}
 	}
 	base := []string{}
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
 		switch key {
-		case "MARKETWATCH_CONFIG", "MARKETWATCH_STATE", "MARKETWATCH_DRY_RUN", "PUSHOVER_APP_TOKEN", "PUSHOVER_USER_KEY":
+		case "MARKETWATCH_CONFIG", "MARKETWATCH_STATE", "MARKETWATCH_DRY_RUN", "PUSHOVER_APP_TOKEN", "PUSHOVER_USER_KEY", "DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD", "DB_SSLMODE":
 			continue
 		}
 		base = append(base, entry)
 	}
 	cases := []struct {
-		name                       string
-		args                       []string
-		config, state, dry, reason string
+		name                string
+		args                []string
+		config, dry, reason string
+		dbOverrides         map[string]string
+		stateEnv            *string
 	}{
-		{"env_only", nil, h.options.ConfigPath, state, "true", "invalid state"},
-		{"config_flag", []string{"--config", invalidConfig}, h.options.ConfigPath, state, "true", "nonempty rules list"},
-		{"state_flag", []string{"--state", alternate}, h.options.ConfigPath, state, "true", "unsupported state version"},
-		{"dry_false_flag", []string{"--dry-run=false"}, h.options.ConfigPath, state, "true", "PUSHOVER_APP_TOKEN and PUSHOVER_USER_KEY are required"},
-		{"dry_true_flag", []string{"--dry-run"}, h.options.ConfigPath, state, "false", "invalid state"},
-		{"bad_dry", nil, h.options.ConfigPath, state, "yes", "MARKETWATCH_DRY_RUN"},
-		{"empty_dry_is_false", nil, h.options.ConfigPath, state, "", "PUSHOVER_APP_TOKEN and PUSHOVER_USER_KEY are required"},
-		{"numeric_true", nil, h.options.ConfigPath, state, "1", "invalid state"},
-		{"empty_config", nil, "", state, "true", "config and state paths must be nonempty"},
-		{"empty_state", nil, h.options.ConfigPath, "", "true", "config and state paths must be nonempty"},
-		{"flag_overrides_bad_env", []string{"--config", h.options.ConfigPath, "--state", state, "--dry-run"}, "", "", "bad", "invalid state"},
+		{name: "env_only", config: h.options.ConfigPath, dry: "true", reason: "unsupported state version 3"},
+		{name: "config_flag", args: []string{"--config", invalidConfig}, config: h.options.ConfigPath, dry: "true", reason: "nonempty rules list"},
+		{name: "state_flag_removed", args: []string{"--state", "legacy.json"}, config: h.options.ConfigPath, dry: "true", reason: "not defined"},
+		{name: "dry_false_flag", args: []string{"--dry-run=false"}, config: h.options.ConfigPath, dry: "true", reason: "PUSHOVER_APP_TOKEN and PUSHOVER_USER_KEY are required"},
+		{name: "dry_true_flag", args: []string{"--dry-run"}, config: h.options.ConfigPath, dry: "false", reason: "unsupported state version 3"},
+		{name: "bad_dry", config: h.options.ConfigPath, dry: "yes", reason: "MARKETWATCH_DRY_RUN"},
+		{name: "empty_dry_is_false", config: h.options.ConfigPath, dry: "", reason: "PUSHOVER_APP_TOKEN and PUSHOVER_USER_KEY are required"},
+		{name: "numeric_true", config: h.options.ConfigPath, dry: "1", reason: "unsupported state version 3"},
+		{name: "empty_config", config: "", dry: "true", reason: "config path must be nonempty"},
+		{name: "missing_db_host", config: h.options.ConfigPath, dry: "true", reason: "DB_HOST", dbOverrides: map[string]string{"DB_HOST": ""}},
+		{name: "missing_db_name", config: h.options.ConfigPath, dry: "true", reason: "DB_NAME", dbOverrides: map[string]string{"DB_NAME": ""}},
+		{name: "missing_db_user", config: h.options.ConfigPath, dry: "true", reason: "DB_USER", dbOverrides: map[string]string{"DB_USER": ""}},
+		{name: "missing_db_password", config: h.options.ConfigPath, dry: "true", reason: "DB_PASSWORD", dbOverrides: map[string]string{"DB_PASSWORD": ""}},
+		{name: "invalid_db_port", config: h.options.ConfigPath, dry: "true", reason: "DB_PORT must be between 1 and 65535", dbOverrides: map[string]string{"DB_PORT": "0"}},
+		{name: "invalid_db_sslmode", config: h.options.ConfigPath, dry: "true", reason: "DB_SSLMODE must be disable, require, verify-ca or verify-full", dbOverrides: map[string]string{"DB_SSLMODE": "insecure"}},
+		{name: "bad_database_password", config: h.options.ConfigPath, dry: "true", reason: "PostgreSQL connect failed", dbOverrides: map[string]string{"DB_PASSWORD": "marketwatch-e2e-wrong-password"}},
+		{name: "state_env_removed", config: h.options.ConfigPath, dry: "true", reason: "MARKETWATCH_STATE is no longer supported", stateEnv: strPtr("")},
+		{name: "flag_overrides_bad_env", args: []string{"--config", h.options.ConfigPath, "--dry-run"}, config: "", dry: "bad", reason: "unsupported state version 3"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			args := append([]string{"check"}, c.args...)
 			cmd := exec.Command(binary, args...)
-			cmd.Env = append(append([]string{}, base...), "MARKETWATCH_CONFIG="+c.config, "MARKETWATCH_STATE="+c.state, "MARKETWATCH_DRY_RUN="+c.dry)
+			testDBEnv := make(map[string]string, len(dbEnvironment))
+			for key, value := range dbEnvironment {
+				testDBEnv[key] = value
+			}
+			for key, value := range c.dbOverrides {
+				testDBEnv[key] = value
+			}
+			environment := replacePostgresTestEnv(t, base, testDBEnv)
+			appEnvironment := map[string]string{"MARKETWATCH_CONFIG": c.config, "MARKETWATCH_DRY_RUN": c.dry}
+			if c.stateEnv != nil {
+				appEnvironment["MARKETWATCH_STATE"] = *c.stateEnv
+			}
+			cmd.Env = replacePostgresTestEnv(t, environment, appEnvironment)
 			out, err := cmd.CombinedOutput()
 			if err == nil || !strings.Contains(string(out), c.reason) {
 				t.Fatalf("error=%v output=%s want=%s", err, out, c.reason)
+			}
+			if password := testDBEnv["DB_PASSWORD"]; password != "" && strings.Contains(string(out), password) {
+				t.Fatal("database password leaked in CLI output")
 			}
 			if err := os.WriteFile(filepath.Join(h.dir, "env-"+c.name+".jsonl"), out, 0600); err != nil {
 				t.Fatal(err)
 			}
 		})
 	}
-	for path, expected := range map[string]string{state: "{", alternate: `{"version":3,"rules":{}}`} {
-		after, err := os.ReadFile(path)
-		if err != nil || string(after) != expected {
-			t.Fatal("CLI changed corrupt fixture state")
-		}
-		if _, err := os.Stat(path + ".lock"); !os.IsNotExist(err) {
-			t.Fatal("CLI created a lock in dry-run or before rejecting secrets/ENV")
-		}
+	after, exists := postgresTestStateJSON(t)
+	if !exists || !postgresTestJSONEqual(t, before, after) {
+		t.Fatal("CLI changed invalid database state")
 	}
 }
+
+func strPtr(value string) *string { return &value }
 
 func TestE2ECaseVariantState(t *testing.T) {
 	for _, variant := range []string{"version", "active", "pending"} {
@@ -577,29 +601,33 @@ func TestE2ECaseVariantState(t *testing.T) {
 			h := newHarness(t, oneRule)
 			h.pushStatus = 503
 			h.run(true)
-			data, err := os.ReadFile(h.options.StatePath)
+			data, exists := postgresTestStateJSON(t)
+			if !exists {
+				t.Fatal("state row is missing")
+			}
+			var document map[string]any
+			if err := json.Unmarshal(data, &document); err != nil {
+				t.Fatal(err)
+			}
+			rule := document["rules"].(map[string]any)[ruleKey("90", "absolute-change", 5, "24h")].(map[string]any)
+			switch variant {
+			case "version":
+				document["Version"] = 2
+			case "active":
+				rule["Active"] = false
+			case "pending":
+				rule["pending"].(map[string]any)["Message"] = "ambiguous"
+			}
+			data, err := json.Marshal(document)
 			if err != nil {
 				t.Fatal(err)
 			}
-			switch variant {
-			case "version":
-				data = bytes.Replace(data, []byte(`"version": 2`), []byte(`"version": 3, "Version": 2`), 1)
-			case "active":
-				data = bytes.Replace(data, []byte(`"active": true`), []byte(`"active": true, "Active": false`), 1)
-			case "pending":
-				data = bytes.Replace(data, []byte(`"message":`), []byte(`"Message": "ambiguous", "message":`), 1)
-			}
-			if err := os.WriteFile(h.options.StatePath, data, 0600); err != nil {
-				t.Fatal(err)
-			}
+			setPostgresTestStateJSON(t, data)
 			gets := h.gets
 			h.run(true)
 			h.sent(1)
-			after, err := os.ReadFile(h.options.StatePath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if h.gets != gets || !bytes.Equal(data, after) {
+			after, exists := postgresTestStateJSON(t)
+			if h.gets != gets || !exists || !postgresTestJSONEqual(t, data, after) {
 				t.Fatal("ambiguous state used network or was overwritten")
 			}
 		})
@@ -612,9 +640,9 @@ func TestE2EInvalidMinimalState(t *testing.T) {
 			h := newHarness(t, oneRule)
 			h.pushStatus = 503
 			h.run(true)
-			original, err := os.ReadFile(h.options.StatePath)
-			if err != nil {
-				t.Fatal(err)
+			original, exists := postgresTestStateJSON(t)
+			if !exists {
+				t.Fatal("state row is missing")
 			}
 			var state map[string]any
 			if err := json.Unmarshal(original, &state); err != nil {
@@ -644,17 +672,16 @@ func TestE2EInvalidMinimalState(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(h.options.StatePath, data, 0600); err != nil {
-				t.Fatal(err)
+			setPostgresTestStateJSON(t, data)
+			before, exists := postgresTestStateJSON(t)
+			if !exists {
+				t.Fatal("corrupt state row is missing")
 			}
 			gets := h.gets
 			runErr := h.run(true)
 			h.sent(1)
-			after, err := os.ReadFile(h.options.StatePath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if h.gets != gets || !bytes.Equal(data, after) {
+			after, exists := postgresTestStateJSON(t)
+			if h.gets != gets || !exists || !postgresTestJSONEqual(t, before, after) {
 				t.Fatal("invalid or legacy state used network or was overwritten")
 			}
 			if variant == "legacy" && !strings.Contains(runErr.Error(), "unsupported state version 1") {
@@ -822,8 +849,8 @@ func TestE2EInvalidPriceConditionsBeforeIO(t *testing.T) {
 			if h.gets != 0 {
 				t.Fatal("invalid condition used network")
 			}
-			if _, err := os.Stat(filepath.Dir(h.options.StatePath)); !os.IsNotExist(err) {
-				t.Fatal("invalid condition wrote state")
+			if postgresTestStateTableExists(t) {
+				t.Fatal("invalid condition created state table")
 			}
 		})
 	}

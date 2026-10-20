@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -13,9 +14,9 @@ import (
 const pendingLifetime = 3 * time.Hour
 
 type Options struct {
-	ConfigPath, StatePath string
-	DryRun                bool
-	Token, User           string
+	ConfigPath  string
+	DryRun      bool
+	Token, User string
 }
 type Runner struct {
 	Client           *http.Client
@@ -40,21 +41,17 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 	if err != nil {
 		return err
 	}
+	if _, legacy := os.LookupEnv("MARKETWATCH_STATE"); legacy {
+		return errors.New("MARKETWATCH_STATE is no longer supported; configure PostgreSQL with DB_* variables")
+	}
 	if !opts.DryRun && (strings.TrimSpace(opts.Token) == "" || strings.TrimSpace(opts.User) == "") {
 		return errors.New("PUSHOVER_APP_TOKEN and PUSHOVER_USER_KEY are required")
 	}
-	if !opts.DryRun {
-		lock, err := acquireLock(opts.StatePath)
-		if err != nil {
-			return err
-		}
-		// Closing releases flock; never unlink the stable lock inode.
-		defer lock.Close()
-	}
-	state, err := loadState(opts.StatePath)
+	store, state, err := openState(ctx, opts.DryRun)
 	if err != nil {
 		return err
 	}
+	defer store.close()
 	r.Logger.Info("check_started", "source", coinLore.Name, "source_url", coinLore.URL, "currency", "USD", "rules", len(rules), "dry_run", opts.DryRun)
 	present := map[string]bool{}
 	for _, rule := range rules {
@@ -162,7 +159,7 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 		}
 		return errors.Join(failures...)
 	}
-	if err := saveState(opts.StatePath, state); err != nil {
+	if err := store.save(ctx, state); err != nil {
 		return errors.Join(append(failures, err)...)
 	}
 	for _, rule := range rules {
@@ -179,7 +176,7 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 			expired++
 			failures = append(failures, fmt.Errorf("rule %q: pending expired before send", rule.ID))
 			r.Logger.Warn("pending_expired", "rule_id", rule.ID)
-			if err := saveState(opts.StatePath, state); err != nil {
+			if err := store.save(ctx, state); err != nil {
 				return errors.Join(append(failures, err)...)
 			}
 			continue
@@ -197,7 +194,7 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 		rs.Pending = nil
 		sent++
 		r.Logger.Info("pushover_accepted", "rule_id", rule.ID, "accepted_at", now)
-		if err := saveState(opts.StatePath, state); err != nil {
+		if err := store.save(ctx, state); err != nil {
 			return errors.Join(append(failures, err)...)
 		}
 	}

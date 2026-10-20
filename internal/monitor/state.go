@@ -6,10 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"os"
-	"path/filepath"
-	"syscall"
 	"time"
 )
 
@@ -29,33 +25,11 @@ type State struct {
 	Rules   map[string]*RuleState `json:"rules"`
 }
 
-func acquireLock(path string) (*os.File, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return nil, fmt.Errorf("create state directory: %w", err)
-	}
-	f, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
-		return nil, fmt.Errorf("open lock: %w", err)
-	}
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		f.Close()
-		return nil, fmt.Errorf("state lock unavailable: %w", err)
-	}
-	return f, nil
+func emptyState() State {
+	return State{Version: stateVersion, Rules: map[string]*RuleState{}}
 }
 
-func loadState(path string) (State, error) {
-	empty := State{Version: stateVersion, Rules: map[string]*RuleState{}}
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return empty, nil
-	}
-	if err != nil {
-		return State{}, fmt.Errorf("read state: %w", err)
-	}
-	if err := uniqueJSON(data); err != nil {
-		return State{}, fmt.Errorf("invalid state: %w", err)
-	}
+func decodeState(data []byte) (State, error) {
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(data, &root); err != nil {
 		return State{}, fmt.Errorf("invalid state object: %w", err)
@@ -123,95 +97,6 @@ func exactFields(object map[string]json.RawMessage, allowed ...string) error {
 		if !known {
 			return fmt.Errorf("unknown state field %q", field)
 		}
-	}
-	return nil
-}
-
-// JSON's default decoder accepts repeated keys. Persistence must not hide them.
-func uniqueJSON(data []byte) error {
-	d := json.NewDecoder(bytes.NewReader(data))
-	d.UseNumber()
-	var value func() error
-	value = func() error {
-		token, err := d.Token()
-		if err != nil {
-			return err
-		}
-		delim, ok := token.(json.Delim)
-		if !ok {
-			return nil
-		}
-		switch delim {
-		case '{':
-			keys := map[string]bool{}
-			for d.More() {
-				key, err := d.Token()
-				if err != nil {
-					return err
-				}
-				s, ok := key.(string)
-				if !ok || keys[s] {
-					return errors.New("duplicate or invalid JSON key")
-				}
-				keys[s] = true
-				if err := value(); err != nil {
-					return err
-				}
-			}
-		case '[':
-			for d.More() {
-				if err := value(); err != nil {
-					return err
-				}
-			}
-		default:
-			return errors.New("invalid JSON delimiter")
-		}
-		_, err = d.Token()
-		return err
-	}
-	if err := value(); err != nil {
-		return err
-	}
-	if _, err := d.Token(); !errors.Is(err, io.EOF) {
-		return errors.New("trailing JSON data")
-	}
-	return nil
-}
-
-func saveState(path string, s State) error {
-	data, err := json.MarshalIndent(s, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode state: %w", err)
-	}
-	data = append(data, '\n')
-	dir := filepath.Dir(path)
-	f, err := os.CreateTemp(dir, ".marketwatch-state-*")
-	if err != nil {
-		return fmt.Errorf("create state temp: %w", err)
-	}
-	defer os.Remove(f.Name())
-	if _, err := f.Write(data); err != nil {
-		f.Close()
-		return fmt.Errorf("write state: %w", err)
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return fmt.Errorf("sync state: %w", err)
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("close state: %w", err)
-	}
-	if err := os.Rename(f.Name(), path); err != nil {
-		return fmt.Errorf("replace state: %w", err)
-	}
-	directory, err := os.Open(dir)
-	if err != nil {
-		return fmt.Errorf("open state directory: %w", err)
-	}
-	defer directory.Close()
-	if err := directory.Sync(); err != nil {
-		return fmt.Errorf("sync state directory: %w", err)
 	}
 	return nil
 }
