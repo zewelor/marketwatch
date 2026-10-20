@@ -1,29 +1,35 @@
 # Marketwatch
 
 A small Go CLI that checks cryptocurrency prices and percentage changes from
-CoinLore and sends alerts through Pushover. Persistent JSON state keeps alerts
-quiet until a condition clears and triggers again.
+CoinLore and sends alerts through Pushover. PostgreSQL stores JSON state so alerts
+stay quiet until a condition clears and triggers again.
 
 Run it manually or schedule it with your own scheduler. Prices are in
 USD; percentage-change rules use CoinLore's 24h or 7d values.
 
 ## Quick start
 
-Requires Go 1.27.1. Edit the illustrative thresholds in
-[config/example.yaml](config/example.yaml), then preview a check:
+Requires Go 1.27.1 and PostgreSQL 18 or newer. Set `DB_HOST`, `DB_NAME`, `DB_USER`
+and `DB_PASSWORD` for a direct PostgreSQL read/write endpoint. `DB_PORT` defaults
+to `5432`; `DB_SSLMODE` defaults to `require`. For a local database without TLS,
+set `DB_SSLMODE=disable`. Edit the illustrative thresholds in
+[config/example.yaml](config/example.yaml), set `DB_PASSWORD` through your secret
+mechanism, then preview a check:
 
 ```sh
-go run ./cmd/marketwatch check --config config/example.yaml --state data/state.json --dry-run
+export DB_HOST=127.0.0.1 DB_NAME=marketwatch DB_USER=marketwatch DB_SSLMODE=disable
+go run ./cmd/marketwatch check --config config/example.yaml --dry-run
 ```
 
-Dry-run fetches market data and logs decisions without sending alerts or creating
-or changing state files. It does not require Pushover credentials.
+Dry-run reads the existing state from PostgreSQL, or previews empty state if the state table is absent. It
+still requires database configuration, but does not create or change database
+state and does not require Pushover credentials.
 
 For real alerts, set `PUSHOVER_APP_TOKEN` and `PUSHOVER_USER_KEY` in your
 shell environment, then run:
 
 ```sh
-go run ./cmd/marketwatch check --config config/example.yaml --state data/state.json --dry-run=false
+go run ./cmd/marketwatch check --config config/example.yaml --dry-run=false
 ```
 
 CoinLore does not require an API key. Write `coin: btc` or `coin: eth`; symbols are
@@ -92,37 +98,97 @@ but before saving state can produce a duplicate.
 | Flag | Environment variable | Default |
 | --- | --- | --- |
 | `--config` | `MARKETWATCH_CONFIG` | `/config/config.yaml` |
-| `--state` | `MARKETWATCH_STATE` | `/data/state.json` |
 | `--dry-run` | `MARKETWATCH_DRY_RUN` | `false` |
-| — | `PUSHOVER_APP_TOKEN` | Required for real alerts |
-| — | `PUSHOVER_USER_KEY` | Required for real alerts |
+| — | `DB_HOST` | Required |
+| — | `DB_NAME` | Required |
+| — | `DB_USER` | Required |
+| — | `DB_PASSWORD` | Required |
+| — | `DB_PORT` | `5432` |
+| — | `DB_SSLMODE` | `require` |
+| — | `PUSHOVER_APP_TOKEN` | Required for real checks |
+| — | `PUSHOVER_USER_KEY` | Required for real checks |
 
 Explicit flags override environment variables, which override defaults:
 
 ```sh
 MARKETWATCH_CONFIG=config/example.yaml \
-MARKETWATCH_STATE=data/state.json \
 MARKETWATCH_DRY_RUN=true \
 go run ./cmd/marketwatch check
 ```
 
-Empty paths are errors. Boolean values accept `true`/`false`, `1`/`0`, `t`/`f`
-and Go's uppercase variants; an empty boolean environment value means false.
-`--dry-run=false` overrides an enabled environment value. Use
-`marketwatch check --help` for all options.
+`DB_SSLMODE` accepts `disable`, `require`, `verify-ca` or `verify-full`. The
+`--state` flag is unknown, and setting the legacy `MARKETWATCH_STATE` environment
+variable fails explicitly. Empty paths and invalid booleans are errors. Boolean
+values accept `true`/`false`, `1`/`0`, `t`/`f` and Go's uppercase variants; an
+empty boolean environment value means false. `--dry-run=false` overrides an
+enabled environment value. Configuration and database settings are validated
+before database or HTTP requests. Use `marketwatch check --help` for all options.
 
 Logs are JSON. Exit code 0 means the check completed without errors; code 1 also
 covers partial provider failures, failed notifications and expired pending alerts.
 Valid rules continue to run when another rule has invalid market data.
 
-State format version 2 stores rule fingerprints, activity and pending messages.
-Invalid or unsupported state, including version 1, is rejected without resetting
-or overwriting the file. Do not remove the state or its lock while a check runs.
+The `public.marketwatch_state` table has one row: a boolean primary key constrained
+to `true`, and a `jsonb` state value. The JSON document remains version 2 and stores
+rule fingerprints, activity and pending messages. A real check creates the table
+and its initial empty state only when the table is absent; a table with no singleton
+row, invalid JSON state or an unsupported version fails without resetting it.
+Database errors stop the check. A real check uses one database session for its
+whole run and does not reconnect mid-check.
 
 When upgrading from manually named rule IDs, remove `id` from the YAML and retain
-the state file. Matching version-2 entries are rekeyed by fingerprint, preserving
-activity and pending messages. Multiple entries mapping to one key fail explicitly
-without overwriting the state. Dry-run previews this transition without saving it.
+the database state. Matching version-2 entries are rekeyed by fingerprint,
+preserving activity and pending messages. Multiple entries mapping to one key fail
+explicitly without overwriting the state. Dry-run previews this transition without
+saving it.
+
+### Migrating an existing JSON state file
+
+The program never reads or imports the legacy state file. Before upgrading, back
+up the state file and keep it until the database import has been checked. Import
+the file before the first application run against the new database; otherwise that
+run initializes an empty state row. Use a PostgreSQL 18+ `psql` client connected
+to the same direct read/write endpoint. Set `PGHOST`, `PGPORT`, `PGDATABASE`,
+`PGUSER` and `PGSSLMODE` from the corresponding `DB_*` settings, and provide the
+password through a protected `.pgpass` file or the interactive prompt.
+
+Before importing, validate the backup with the previous file-state release's
+dry-run, for example:
+
+```sh
+marketwatch-legacy check --config config/example.yaml \
+  --state /secure/backup/marketwatch-state.json --dry-run
+```
+
+Use the old binary for this validation. The current release rejects `--state`.
+The old dry-run checks the JSON state without changing the file. This is required
+because PostgreSQL `jsonb` normalizes duplicate identical keys when it stores JSON.
+
+Create the table and insert the singleton in one transaction. The `psql` variable
+reads the backup locally; `:'state'` quotes its contents as an SQL literal
+([PostgreSQL 18 psql documentation](https://www.postgresql.org/docs/18/app-psql.html#APP-PSQL-INTERPOLATION)).
+
+```sh
+PGHOST="$DB_HOST" PGPORT="${DB_PORT:-5432}" PGDATABASE="$DB_NAME" \
+  PGUSER="$DB_USER" PGSSLMODE="${DB_SSLMODE:-require}" \
+  psql -X -v ON_ERROR_STOP=1 <<'SQL'
+\set state `cat /secure/backup/marketwatch-state.json`
+BEGIN;
+CREATE TABLE public.marketwatch_state (
+  id boolean PRIMARY KEY DEFAULT true CHECK (id),
+  state jsonb NOT NULL
+);
+INSERT INTO public.marketwatch_state (id, state)
+VALUES (true, :'state'::jsonb);
+SELECT id, state->>'version' AS version FROM public.marketwatch_state;
+COMMIT;
+SQL
+```
+
+The create statement intentionally fails if the destination table already exists,
+and the insert does not overwrite a singleton. Verify that the query returns one
+row with version `2` before running a real check, and retain the original backup.
+Resolve any pre-existing table or row explicitly instead of overwriting it.
 
 ## Docker
 
@@ -149,13 +215,16 @@ Preview with a read-only configuration:
 
 ```sh
 docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --env DB_HOST --env DB_NAME --env DB_USER --env DB_PASSWORD \
+  --env DB_PORT --env DB_SSLMODE \
   --mount "type=bind,src=$PWD/config,dst=/config,readonly" \
   marketwatch:local check --dry-run
 ```
 
-The image runs as UID/GID 65532. For real alerts, mount a persistent `/data`
-directory writable by that user, and pass both Pushover variables with `--env`.
-The filesystem must support `flock`, atomic rename and directory synchronization.
+The image runs as UID/GID 65532. Mount `/config` read-only and pass the required
+`DB_*` variables for both real checks and dry-runs. State is stored in PostgreSQL;
+`DB_HOST` must be reachable from inside the container. The container does not need
+a writable `/data` directory. Pass both Pushover variables for real checks.
 
 ## Runtime setup
 
@@ -164,24 +233,50 @@ operator. For an unattended setup:
 
 - Set the environment variables listed above and supply Pushover credentials
   through your environment's secret mechanism.
-- Provide a readable YAML configuration and a writable, persistent state
-  directory. Mount the whole directory, including the lock file and temporary
-  files used for atomic saves; mounting only `state.json` is insufficient.
-- Run hourly and avoid overlapping checks. A second check fails while the first
-  holds the state lock. Failed notifications are retried by later checks and
-  expire after three hours.
-- Retain JSON logs and surface exit code 1 as a failed check. Verify state
-  persistence and storage support for locking and synchronization in your runtime.
+- Provide a readable YAML configuration and PostgreSQL 18+ through a direct
+  read/write endpoint, not a transaction-mode pooler. The connection must stay on
+  the same database session for the whole check so its session advisory lock is
+  held until the check finishes. The program does not reconnect mid-run.
+- The database role must be able to create the state table in `public` on first
+  use and read/update its singleton row on later checks.
+- Run hourly and prevent scheduler overlap. Failed notifications are retried by
+  later checks and expire after three hours.
+- Retain JSON logs and surface exit code 1 as a failed check. Confirm database
+  backups and recovery for the state table.
 
 ## Development
 
+Tests require a disposable PostgreSQL 18+ database. Set
+`MARKETWATCH_TEST_POSTGRES=1`, `DB_HOST` to a loopback address, `DB_NAME` to
+`marketwatch_test`, and `DB_USER`/`DB_PASSWORD` to disposable credentials;
+`DB_PORT` defaults to `5432`. Tests fail when the required database is unavailable
+instead of skipping PostgreSQL coverage. For example, start a local test server:
+
 ```sh
-just verify
+docker run --rm --detach --name marketwatch-postgres-test \
+  -e POSTGRES_USER=marketwatch_test \
+  -e POSTGRES_PASSWORD=marketwatch_test \
+  -e POSTGRES_DB=marketwatch_test \
+  -p 127.0.0.1:15432:5432 \
+  --tmpfs /var/lib/postgresql:rw \
+  postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
 ```
 
-This runs formatting checks, `go vet`, E2E tests with the race detector, CLI smoke
-tests and static Linux amd64/arm64 builds. `just test` runs tests without retaining
-artifacts; `just e2e` keeps logs and state snapshots in `artifacts/e2e/`.
+Set `DB_HOST=127.0.0.1`, `DB_PORT=15432`, `DB_NAME=marketwatch_test`,
+`DB_USER=marketwatch_test`, `DB_PASSWORD=marketwatch_test`, and
+`DB_SSLMODE=disable` for this disposable local instance, then run:
+
+```sh
+MARKETWATCH_TEST_POSTGRES=1 just verify
+```
+
+This runs formatting checks, `go vet`, PostgreSQL-backed E2E tests with the race
+detector, CLI smoke tests and static Linux amd64/arm64 builds. `just test` runs
+tests without retaining artifacts; `just e2e` keeps logs and state snapshots in
+`artifacts/e2e/`.
+
+Stop and remove the disposable server after testing with
+`docker stop marketwatch-postgres-test`.
 
 CI runs the Go checks alongside Dockerfile lint, builds images for both
 architectures and uploads E2E artifacts. The catalog workflow opens update PRs;

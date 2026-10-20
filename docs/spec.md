@@ -35,17 +35,25 @@ canonical definition. Equivalent numeric spellings and coin aliases identify the
 same rule. Identical definitions are rejected before I/O; multiple different
 thresholds for one coin and condition are valid independent rules.
 
-Currency is fixed to USD. Source, endpoints, timeouts and notification channel are
-fixed in code. Non-dry-run checks require both Pushover credential variables.
+Currency is fixed to USD. CoinLore endpoints, timeouts and notification channel
+are fixed in code. PostgreSQL 18 or newer is required. `DB_HOST`, `DB_NAME`,
+`DB_USER` and `DB_PASSWORD` are required for both real checks and dry-runs;
+`DB_PORT` defaults to `5432`, and `DB_SSLMODE` defaults to `require` and accepts
+`disable`, `require`, `verify-ca` or `verify-full`. The database connection must
+use a direct read/write endpoint, not a transaction-mode connection pooler.
+Non-dry-run checks also require both Pushover credential variables.
 
-CLI takes precedence over ENV, then defaults. Empty paths and invalid booleans are
-errors before configuration reads. A valid explicit flag overrides an invalid
+CLI takes precedence over ENV, then defaults. `--state` is unsupported and is an
+unknown flag; setting the legacy `MARKETWATCH_STATE` environment variable is an
+explicit error. Empty paths, invalid booleans and invalid database settings are
+errors before database or HTTP requests. A valid explicit flag overrides an invalid
 value for the same option in ENV.
 
-Dry-run reads configuration and existing state, fetches data and logs decisions.
-It does not require credentials, send notifications, acquire a lock, create
-directories or write state. With a concurrent check, it previews an atomic state
-snapshot rather than participating in the check's transaction.
+All market configuration is validated before database or HTTP requests. Dry-run
+reads configuration and state in a read-only database transaction, fetches data
+and logs decisions. If the state table is absent, it previews empty state. It does
+not require Pushover credentials, send notifications, acquire an advisory lock,
+create tables or write state.
 
 ## Market data
 
@@ -134,24 +142,41 @@ Valid version-2 state with manually named keys is rekeyed by matching fingerprin
 to configured definitions. Activity and the exact pending message and observation
 time are preserved, including during a market outage. The transition is logged.
 If multiple entries would map to one key, the check fails before HTTP and leaves
-the state file unchanged. Dry-run previews rekeying without saving it.
+the database state unchanged. Dry-run previews rekeying without saving it.
 
-A missing state file starts empty. Unreadable, empty, malformed, incomplete or
-unsupported state fails before HTTP; the file is never silently reset.
-Version 1 is unsupported. Field names must match exactly and repeated JSON keys
-are rejected.
+The state table is `public.marketwatch_state` with one singleton row:
+`id boolean PRIMARY KEY DEFAULT true CHECK (id), state jsonb NOT NULL`. A real check
+creates the table and an initial empty state only when the table is absent. An
+existing table without the singleton row, malformed or incomplete JSON state,
+case-variant or unknown fields, invalid values or an unsupported version fails
+without a reset. Version 1 is unsupported. The `state` JSON document remains
+version 2. PostgreSQL `jsonb` normalizes duplicate identical keys, so duplicate-key
+rejection applies to legacy file validation before import, not to database reads.
 
-A nonblocking exclusive lock on `<state-path>.lock` is held through the entire
-check. The stable lock file is never unlinked. Storage must support `flock`, atomic
-rename within a directory and file/directory synchronization.
+A real check holds a session-level advisory lock on its single database connection
+for the entire check. The connection remains attached to the direct read/write
+endpoint for the check and is not reconnected mid-run. External scheduling must
+still prevent overlapping checks. Dry-run takes no advisory lock. The program does
+not use transaction-mode pooling.
 
-Saving writes a temporary file in the same directory, syncs it, renames it over
-the state file and syncs the directory. All evaluations and pending messages are
-saved before sending. After each API acceptance, that pending is cleared and saved
-immediately; activity remains unchanged. A save error stops further sends.
+Each state save uses a short database transaction. Evaluations and pending
+notifications are committed before sending. After each API acceptance, that
+pending message is cleared and committed immediately; activity remains unchanged.
+API acceptance means HTTP 200 with JSON `status=1`.
+Database errors stop the check. There is no reconnect or retry within a run. If a
+commit outcome is uncertain, the next check reloads the database state.
 
 There is no exactly-once guarantee. API acceptance followed by a crash or failed
-save can result in a duplicate on the next check. Market history is not retained.
+post-acceptance commit can result in a duplicate on the next check. Market history
+is not retained.
+
+The program never reads or automatically migrates a legacy JSON state file. An
+operator moving from file state must back up the file and validate it with the
+last file-state release's dry-run before importing its version-2 JSON into the
+singleton row. This catches duplicate JSON keys before `jsonb` normalizes them.
+The documented manual `psql` procedure is in the README. Do not start against a
+new empty database while an existing file contains state, since first-run
+initialization would otherwise create empty state.
 
 ## Execution and delivery
 
@@ -161,9 +186,11 @@ skips, accepted notifications, replaced/expired pending and an execution summary
 Exit 0 means no errors; exit 1 includes partial failures and expired pending.
 
 The Linux amd64/arm64 image uses a statically linked binary, CA certificates and
-UID/GID 65532. Real checks require a writable, persistent state directory and
-Pushover credentials supplied through environment variables. Operators provide
-their own scheduling and deployment. CI tests and builds. After a successful
+UID/GID 65532. Real checks require PostgreSQL state and Pushover credentials
+supplied through environment variables. The container needs no persistent `/data`
+directory; the YAML configuration is mounted read-only at `/config`. Operators
+provide their own scheduling and deployment. CI runs tests against PostgreSQL 18
+and builds. After a successful
 push-to-main verification, a separate job with package-write permission publishes
 Linux amd64/arm64 images to GHCR as `latest` and `sha-<full-commit-SHA>`, and records
 the manifest digest. Other refs and pull requests do not publish. Main runs are

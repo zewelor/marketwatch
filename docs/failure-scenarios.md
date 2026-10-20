@@ -1,13 +1,47 @@
 # E2E and failure scenarios
 
+## PostgreSQL 18+ persistence transition
+
+Before implementation, account for missing/invalid DB settings, PostgreSQL older
+than 18, connection failure, competing checks, a missing singleton row, malformed
+or unsupported state, and write/commit failures before or after an external send.
+A lost COMMIT response is an uncertain outcome: stop this check and read committed
+state on the next invocation. Never reconnect and replay an in-memory snapshot.
+Persist pending messages before sending and clear each only after API acceptance;
+an accepted message whose acknowledgement was not committed can be duplicated.
+Pending expiry/replacement means delivery is not guaranteed.
+
+Dry-run must work against both a fresh database and existing state using read-only
+SQL, without creating tables, rows, or taking the application advisory lock. It
+requires DB settings but no Pushover credentials. Invalid configuration must fail
+before DB or market I/O. A real run owns a session advisory lock for its entire
+lifetime; short save transactions must not remain open during HTTP. A lost DB
+session can release the lock while HTTP is still in flight, so the scheduler must
+also prevent overlap. Do not claim exactly-once delivery or multiple-worker support.
+
+CLI subprocess tests must preserve omitted optional DB settings. In particular,
+an unset `DB_PORT` must exercise the supported default of 5432 rather than fail
+in test setup; explicitly configured ports must continue to work.
+
+Reuse the existing controlled-clock E2E sequences against a real disposable
+PostgreSQL 18 instance, recording database snapshots instead of state files. Add
+fault-injection coverage for storage failures, exclusive ownership, restart,
+read-only preview, and uncertain commits. These tests exercise the changed
+persistence boundary directly. Property/model-based tests could explore longer
+interleavings but add a second behavioral model without a currently uncovered
+rule transition; formal methods remain deferred because execution is one check
+at a time and external delivery cannot be made atomic with a database commit.
+Reassess if concurrent workers or delivery guarantees change.
+
 Behavior contract: [spec.md](spec.md). The E2E harness runs the production
-monitor against local HTTP fixtures and a temporary on-disk state file; it
-controls the clock for repeatable sequences.
+monitor against local HTTP fixtures and a disposable PostgreSQL 18 database; it
+controls the clock for repeatable sequences. The suite requires explicit test
+opt-in and refuses database cleanup outside the documented loopback test database.
 
 Run `just e2e` to execute race-enabled E2E coverage and write artifacts under
 `artifacts/e2e/`. The target creates `results.jsonl` and a directory per test;
 each `step-XX.json` records the fixture response, request fields, JSON logs,
-result, and state file when present. Run `just verify` for formatting, vet, the
+result, and database state when present. Run `just verify` for formatting, vet, the
 same E2E suite, and static amd64/arm64 binaries. `just test` runs the Go suite
 without the race detector or persistent E2E artifacts.
 
@@ -23,20 +57,21 @@ building arm64 is not a runtime arm64 test.
 | Rules | Inclusive trigger limits, strict rearm margins, repeated episodes, ID canonicalization, rule ordering, and definition changes. |
 | Pending delivery | Retry after send failure, retry while CoinLore is unavailable, rearm retaining pending, new episodes replacing pending, and expiry at three hours. |
 | Pushover and writes | Non-success responses retain pending; a 4xx stops further sends; state is saved before sending and after each accepted notification. A crash after remote acceptance but before the success save can cause a duplicate. |
-| Durable state | Version 2 stores each rule's `Fingerprint`, `Active`, and optional `Pending{ObservedAt, Message}`. Invalid, unknown, duplicate, or case-variant keys and version 1 are rejected before HTTP; the file remains unchanged. |
-| CLI and dry-run | Real-binary argument and environment handling; dry-run avoids locks, directory creation, sends, and state changes. |
+| Durable state | Version 2 stores each rule's `Fingerprint`, `Active`, and optional `Pending{ObservedAt, Message}`. Invalid, unknown or case-variant keys and version 1 are rejected before HTTP; committed state remains unchanged. PostgreSQL JSONB validates JSON syntax and canonicalizes repeated keys before application reads. |
+| PostgreSQL | Missing/invalid connection settings and authentication failure, exclusive session ownership, a missing singleton, session loss before/after a send, restart, and a lost response after a server-confirmed COMMIT. |
+| CLI and dry-run | Real-binary argument and environment handling; obsolete file-state options fail explicitly; dry-run avoids DDL, application advisory locks, sends, and state changes. |
 
 Fixtures verify application behavior against controlled responses. They do not
 prove current CoinLore or Pushover behavior, delivery by either live service,
-or filesystem and locking behavior on the operator's storage. Those require separate
-runtime evidence.
+or PostgreSQL availability, permissions, TLS, backup/restore and scheduler behavior
+in the operator's deployment. Those require separate runtime evidence.
 
 Controlled-clock sequence E2E is the current state-transition method: it drives
 the production runner through retry, rearm, replacement, expiry, restart, and
-write-failure paths while checking logs and persisted state. Property-based or
+write-failure paths while checking logs and committed database state. Property-based or
 model-based testing is deferred because these meaningful transitions and
 failure cases are explicitly covered. Formal methods are deferred while state
-is local to one process guarded by `flock` and delivery does not promise
+has one active check guarded by a session advisory lock and delivery does not promise
 exactly-once semantics. Reassess these choices when state, contracts, or
 concurrency change.
 
