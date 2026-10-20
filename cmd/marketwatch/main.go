@@ -53,6 +53,7 @@ func run(args []string, logger *slog.Logger) error {
 				return monitor.New(logger).Run(ctx, monitor.Options{
 					ConfigPath: config, DryRun: cmd.Bool("dry-run"),
 					Token: os.Getenv("PUSHOVER_APP_TOKEN"), User: os.Getenv("PUSHOVER_USER_KEY"),
+					HealthchecksPingURL: os.Getenv("HEALTHCHECKS_PING_URL"),
 				})
 			},
 		}},

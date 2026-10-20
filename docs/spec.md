@@ -19,7 +19,7 @@ The YAML root contains a nonempty `rules` list. Each rule has:
 Each rule contains exactly one of `threshold`, `above` or `below`. Null, missing,
 combined or invalid conditions are errors. Price rules do not measure a change in USD.
 
-All rules are validated before network requests or state writes. Unknown fields,
+All rules are validated before market/notification requests or state writes. Unknown fields,
 duplicate keys or canonical rule definitions, multiple YAML documents, invalid
 values and unsupported windows are errors. Symbols resolve through the embedded
 CoinLore catalog before I/O. Unknown or ambiguous symbols fail with an explicit
@@ -46,13 +46,13 @@ Non-dry-run checks also require both Pushover credential variables.
 CLI takes precedence over ENV, then defaults. `--state` is unsupported and is an
 unknown flag; setting the legacy `MARKETWATCH_STATE` environment variable is an
 explicit error. Empty paths, invalid booleans and invalid database settings are
-errors before database or HTTP requests. A valid explicit flag overrides an invalid
+errors before database or market/notification requests. A valid explicit flag overrides an invalid
 value for the same option in ENV.
 
-All market configuration is validated before database or HTTP requests. Dry-run
+All market configuration is validated before database or market/notification requests. Dry-run
 reads configuration and state in a read-only database transaction, fetches data
 and logs decisions. If the state table is absent, it previews empty state. It does
-not require Pushover credentials, send notifications, acquire an advisory lock,
+not require Pushover credentials, send notifications or Healthchecks pings, acquire an advisory lock,
 create tables or write state.
 
 ## Market data
@@ -141,7 +141,7 @@ Reordering unchanged definitions preserves activity and pending.
 Valid version-2 state with manually named keys is rekeyed by matching fingerprints
 to configured definitions. Activity and the exact pending message and observation
 time are preserved, including during a market outage. The transition is logged.
-If multiple entries would map to one key, the check fails before HTTP and leaves
+If multiple entries would map to one key, the check fails before market/notification HTTP and leaves
 the database state unchanged. Dry-run previews rekeying without saving it.
 
 The state table is `public.marketwatch_state` with one singleton row:
@@ -178,10 +178,29 @@ The documented manual `psql` procedure is in the README. Do not start against a
 new empty database while an existing file contains state, since first-run
 initialization would otherwise create empty state.
 
+## Healthchecks
+
+`HEALTHCHECKS_PING_URL` optionally supplies the base URL of a Healthchecks check.
+Unset or empty disables the integration. Once a real check starts, it sends GET
+to the base URL with `/start` appended before configuration/state validation.
+After all work, including state persistence and closing the database session, it
+sends GET to the base URL on success or with `/fail` appended on any returned
+error, including partial failures. CLI argument parsing errors do not start a
+check. Trailing path slashes are removed before appending the event; query
+parameters are preserved. Dry-run sends no Healthchecks requests.
+
+Each ping has a fixed two-second timeout, with no retries or redirects. The final
+ping has an independent context so cancellation or expiry of the check deadline
+still permits reporting failure, taking up to two additional seconds. Invalid
+URLs, transport/read errors and HTTP statuses other than 200 produce warnings
+only; they do not stop price checking or affect its result. Ping URLs and response
+bodies are never logged. See the [Healthchecks Pinging API](https://healthchecks.io/docs/http_api/).
+
 ## Execution and delivery
 
-HTTP requests are sequential with a 10-second timeout and a 90-second check
-context deadline. SIGINT/SIGTERM cancel requests. Logs are JSON and include rule decisions,
+Market and notification HTTP requests are sequential with a 10-second timeout and
+a 90-second check context deadline. SIGINT/SIGTERM cancel the check; the final
+Healthchecks ping uses the separate deadline described above. Logs are JSON and include rule decisions,
 skips, accepted notifications, replaced/expired pending and an execution summary.
 Exit 0 means no errors; exit 1 includes partial failures and expired pending.
 

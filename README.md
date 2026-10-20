@@ -107,6 +107,7 @@ but before saving state can produce a duplicate.
 | — | `DB_SSLMODE` | `require` |
 | — | `PUSHOVER_APP_TOKEN` | Required for real checks |
 | — | `PUSHOVER_USER_KEY` | Required for real checks |
+| — | `HEALTHCHECKS_PING_URL` | Unset/empty disables Healthchecks |
 
 Explicit flags override environment variables, which override defaults:
 
@@ -122,7 +123,14 @@ variable fails explicitly. Empty paths and invalid booleans are errors. Boolean
 values accept `true`/`false`, `1`/`0`, `t`/`f` and Go's uppercase variants; an
 empty boolean environment value means false. `--dry-run=false` overrides an
 enabled environment value. Configuration and database settings are validated
-before database or HTTP requests. Use `marketwatch check --help` for all options.
+before database, market or notification requests. Use `marketwatch check --help` for all options.
+
+Optionally set `HEALTHCHECKS_PING_URL` to a check's base ping URL, including for
+self-hosted Healthchecks. Each real check sends GET to `/start` before checking,
+then to the base URL on success or `/fail` on any check error (including partial
+failures). Each ping has a two-second timeout, without retries or redirects.
+Healthchecks failures produce warnings and leave price checking and its exit code
+unaffected. Dry-run sends no pings. The URL is treated as a secret and is not logged.
 
 Logs are JSON. Exit code 0 means the check completed without errors; code 1 also
 covers partial provider failures, failed notifications and expired pending alerts.
@@ -224,7 +232,8 @@ docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges \
 The image runs as UID/GID 65532. Mount `/config` read-only and pass the required
 `DB_*` variables for both real checks and dry-runs. State is stored in PostgreSQL;
 `DB_HOST` must be reachable from inside the container. The container does not need
-a writable `/data` directory. Pass both Pushover variables for real checks.
+a writable `/data` directory. Pass both Pushover variables for real checks and
+`--env HEALTHCHECKS_PING_URL` when enabling Healthchecks.
 
 ## Runtime setup
 

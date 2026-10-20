@@ -480,6 +480,7 @@ func TestE2EStateAndDryRun(t *testing.T) {
 }
 
 func TestCLISmoke(t *testing.T) {
+	t.Setenv("HEALTHCHECKS_PING_URL", "")
 	h := newHarness(t, "rules: []")
 	binary := filepath.Join(t.TempDir(), "marketwatch")
 	cmd := exec.Command("go", "build", "-o", binary, "../../cmd/marketwatch")
@@ -503,6 +504,12 @@ func TestCLISmoke(t *testing.T) {
 
 func TestCLIEnvironment(t *testing.T) {
 	h := newHarness(t, oneRule)
+	pings := make(chan string, 8)
+	healthchecks := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		pings <- req.URL.Path
+		fmt.Fprint(w, "OK")
+	}))
+	defer healthchecks.Close()
 	binary := filepath.Join(t.TempDir(), "marketwatch")
 	build := exec.Command("go", "build", "-o", binary, "../../cmd/marketwatch")
 	if out, err := build.CombinedOutput(); err != nil {
@@ -527,7 +534,7 @@ func TestCLIEnvironment(t *testing.T) {
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
 		switch key {
-		case "MARKETWATCH_CONFIG", "MARKETWATCH_STATE", "MARKETWATCH_DRY_RUN", "PUSHOVER_APP_TOKEN", "PUSHOVER_USER_KEY", "DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD", "DB_SSLMODE":
+		case "MARKETWATCH_CONFIG", "MARKETWATCH_STATE", "MARKETWATCH_DRY_RUN", "HEALTHCHECKS_PING_URL", "PUSHOVER_APP_TOKEN", "PUSHOVER_USER_KEY", "DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD", "DB_SSLMODE":
 			continue
 		}
 		base = append(base, entry)
@@ -570,7 +577,7 @@ func TestCLIEnvironment(t *testing.T) {
 				testDBEnv[key] = value
 			}
 			environment := replacePostgresTestEnv(t, base, testDBEnv)
-			appEnvironment := map[string]string{"MARKETWATCH_CONFIG": c.config, "MARKETWATCH_DRY_RUN": c.dry}
+			appEnvironment := map[string]string{"MARKETWATCH_CONFIG": c.config, "MARKETWATCH_DRY_RUN": c.dry, "HEALTHCHECKS_PING_URL": healthchecks.URL + "/fixture-check"}
 			if c.stateEnv != nil {
 				appEnvironment["MARKETWATCH_STATE"] = *c.stateEnv
 			}
@@ -578,6 +585,24 @@ func TestCLIEnvironment(t *testing.T) {
 			out, err := cmd.CombinedOutput()
 			if err == nil || !strings.Contains(string(out), c.reason) {
 				t.Fatalf("error=%v output=%s want=%s", err, out, c.reason)
+			}
+			var paths []string
+			for len(pings) > 0 {
+				paths = append(paths, <-pings)
+			}
+			want := ""
+			if c.name == "dry_false_flag" || c.name == "empty_dry_is_false" {
+				want = "/fixture-check/start,/fixture-check/fail"
+			}
+			if strings.Join(paths, ",") != want {
+				t.Fatalf("Healthchecks pings=%v want=%s", paths, want)
+			}
+			pingArtifact, marshalErr := json.Marshal(paths)
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			if err := os.WriteFile(filepath.Join(h.dir, "pings-"+c.name+".json"), pingArtifact, 0600); err != nil {
+				t.Fatal(err)
 			}
 			if password := testDBEnv["DB_PASSWORD"]; password != "" && strings.Contains(string(out), password) {
 				t.Fatal("database password leaked in CLI output")

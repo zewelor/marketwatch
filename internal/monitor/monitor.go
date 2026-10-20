@@ -14,9 +14,10 @@ import (
 const pendingLifetime = 3 * time.Hour
 
 type Options struct {
-	ConfigPath  string
-	DryRun      bool
-	Token, User string
+	ConfigPath          string
+	DryRun              bool
+	Token, User         string
+	HealthchecksPingURL string
 }
 type Runner struct {
 	Client           *http.Client
@@ -33,6 +34,16 @@ func New(logger *slog.Logger) *Runner {
 }
 func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 	start := time.Now()
+	if !opts.DryRun && opts.HealthchecksPingURL != "" {
+		r.pingHealthchecks(ctx, opts.HealthchecksPingURL, "start")
+		defer func() {
+			event := "success"
+			if result != nil {
+				event = "fail"
+			}
+			r.pingHealthchecks(context.WithoutCancel(ctx), opts.HealthchecksPingURL, event)
+		}()
+	}
 	evaluated, sent, created, expired := 0, 0, 0, 0
 	defer func() {
 		r.Logger.Info("summary", "evaluated", evaluated, "pending_created", created, "accepted", sent, "expired", expired, "failed", result != nil, "duration_ms", time.Since(start).Milliseconds(), "dry_run", opts.DryRun)

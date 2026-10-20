@@ -1,5 +1,25 @@
 # E2E and failure scenarios
 
+## Optional Healthchecks pings
+
+Before implementation, account for missing/empty or malformed ping URLs, trailing
+slashes and query parameters, HTTP errors/redirects, connection failure, stalled
+requests, and cancellation of the price check. A real check sends start before
+validation and success only after all work completes; configuration, database,
+market, partial-rule and notification failures send fail instead. The final ping
+gets its own two-second deadline even when the check context is cancelled.
+Healthchecks failures only warn, do not change the check result, and must not
+prevent market evaluation, state persistence or Pushover sends. Never log the
+ping URL, transport error containing it, or response body. Dry-run sends no pings.
+
+Use the PostgreSQL-backed E2E harness and local HTTP fixtures to capture ordered
+ping/market/notification events, failures, timeouts and dry-run state snapshots.
+Exercise environment wiring with the real CLI and retain fixture-only artifacts.
+Property/model-based tests would add a second model for a two-ping sequence
+without changing rule or storage transitions; their maintenance cost is not
+justified here. Formal methods remain deferred because concurrency and delivery
+guarantees are unchanged.
+
 ## PostgreSQL 18+ persistence transition
 
 Before implementation, account for missing/invalid DB settings, PostgreSQL older
@@ -52,17 +72,18 @@ building arm64 is not a runtime arm64 test.
 
 | Area | Covered failure or behavior |
 | --- | --- |
-| Configuration | Invalid YAML, duplicate/unknown fields, explicit rule IDs, duplicate canonical definitions, invalid coins, conditions or windows fail before network or state I/O. |
+| Configuration | Invalid YAML, duplicate/unknown fields, explicit rule IDs, duplicate canonical definitions, invalid coins, conditions or windows fail before market/notification or state I/O. Optional Healthchecks pings still report the failed check. |
 | Market data | HTTP errors, timeout, cancellation, malformed JSON, missing/duplicate IDs, invalid price, and independently missing or invalid change fields. |
 | Rules | Inclusive trigger limits, strict rearm margins, repeated episodes, ID canonicalization, rule ordering, and definition changes. |
 | Pending delivery | Retry after send failure, retry while CoinLore is unavailable, rearm retaining pending, new episodes replacing pending, and expiry at three hours. |
 | Pushover and writes | Non-success responses retain pending; a 4xx stops further sends; state is saved before sending and after each accepted notification. A crash after remote acceptance but before the success save can cause a duplicate. |
-| Durable state | Version 2 stores each rule's `Fingerprint`, `Active`, and optional `Pending{ObservedAt, Message}`. Invalid, unknown or case-variant keys and version 1 are rejected before HTTP; committed state remains unchanged. PostgreSQL JSONB validates JSON syntax and canonicalizes repeated keys before application reads. |
+| Durable state | Version 2 stores each rule's `Fingerprint`, `Active`, and optional `Pending{ObservedAt, Message}`. Invalid, unknown or case-variant keys and version 1 are rejected before market/notification HTTP; committed state remains unchanged. PostgreSQL JSONB validates JSON syntax and canonicalizes repeated keys before application reads. |
 | PostgreSQL | Missing/invalid connection settings and authentication failure, exclusive session ownership, a missing singleton, session loss before/after a send, restart, and a lost response after a server-confirmed COMMIT. |
 | CLI and dry-run | Real-binary argument and environment handling; obsolete file-state options fail explicitly; dry-run avoids DDL, application advisory locks, sends, and state changes. |
+| Healthchecks | Ordered start/success/fail pings including partial/configuration/database failures; absent/empty URL and dry-run disable pings. HTTP errors, redirects, connection failures, malformed URLs and two-second timeouts only warn; cancellation still sends fail. |
 
 Fixtures verify application behavior against controlled responses. They do not
-prove current CoinLore or Pushover behavior, delivery by either live service,
+prove current CoinLore, Pushover or Healthchecks behavior, delivery by any live service,
 or PostgreSQL availability, permissions, TLS, backup/restore and scheduler behavior
 in the operator's deployment. Those require separate runtime evidence.
 
@@ -151,7 +172,7 @@ start a new rule; removed state and its pending are discarded with a warning.
 
 Rekey valid legacy state by matching fingerprints before evaluation. Preserve
 the exact pending message and observation time. If multiple entries would map
-to the same key, fail before HTTP without overwriting the state; never choose
+to the same key, fail before market/notification HTTP without overwriting the state; never choose
 one pending message silently. Dry-run previews rekeying without writing.
 Sequence E2E must cover migration, retry during market failure, dry-run,
 ambiguous legacy state and independent multiple thresholds. Property/model-based
