@@ -1,5 +1,21 @@
 # E2E and failure scenarios
 
+## Concise notification text
+
+Before implementation, account for symbols and numeric coin selectors, above/below
+prices, signed changes in both windows, and numeric IDs absent from the embedded
+catalog. Resolve the display symbol from the existing catalog; an unknown numeric
+ID must fail configuration rather than send an unidentified alert.
+Messages contain only the symbol, USD price and condition (including the observed
+signed change and window for percentage rules). Exclude provider names, IDs,
+fetch timestamps and freshness disclaimers. Persisted pending text remains intact
+for retries. Extend the existing PostgreSQL/HTTP E2E episodes with exact request
+text and unknown-ID cases, retaining reproducible artifacts.
+
+Property/model-based and formal methods add little value for this text and catalog
+validation change compared with explicit E2E cases; state transitions, fingerprints
+and concurrency remain unchanged.
+
 ## Optional Healthchecks pings
 
 Before implementation, account for missing/empty or malformed ping URLs, trailing
@@ -53,7 +69,7 @@ rule transition; formal methods remain deferred because execution is one check
 at a time and external delivery cannot be made atomic with a database commit.
 Reassess if concurrent workers or delivery guarantees change.
 
-Behavior contract: [spec.md](spec.md). The E2E harness runs the production
+User-facing behavior: [README.md](../README.md). The E2E harness runs the production
 monitor against local HTTP fixtures and a disposable PostgreSQL 18 database; it
 controls the clock for repeatable sequences. The suite requires explicit test
 opt-in and refuses database cleanup outside the documented loopback test database.
@@ -73,10 +89,10 @@ building arm64 is not a runtime arm64 test.
 | Area | Covered failure or behavior |
 | --- | --- |
 | Configuration | Invalid YAML, duplicate/unknown fields, explicit rule IDs, duplicate canonical definitions, invalid coins, conditions or windows fail before market/notification or state I/O. Optional Healthchecks pings still report the failed check. |
-| Market data | HTTP errors, timeout, cancellation, malformed JSON, missing/duplicate IDs, invalid price, and independently missing or invalid change fields. |
+| Market data | One request deduplicates IDs and matches results by ID regardless of response order. Numeric fields must be JSON strings parsing as finite `float64`; prices must be positive. HTTP errors, timeout, cancellation, malformed JSON, missing/duplicate IDs, invalid price, and independently missing or invalid change fields are covered. Invalid price skips the coin; invalid change skips only its window. Responses are limited to 4 MiB and redirects are rejected. |
 | Rules | Inclusive trigger limits, strict rearm margins, repeated episodes, ID canonicalization, rule ordering, and definition changes. |
 | Pending delivery | Retry after send failure, retry while CoinLore is unavailable, rearm retaining pending, new episodes replacing pending, and expiry at three hours. |
-| Pushover and writes | Non-success responses retain pending; a 4xx stops further sends; state is saved before sending and after each accepted notification. A crash after remote acceptance but before the success save can cause a duplicate. |
+| Pushover and writes | Normal priority; acceptance requires HTTP 200 and JSON `status=1`. Non-success responses retain pending; a 4xx stops further sends; state is saved before sending and after each accepted notification. A crash after remote acceptance but before the success save can cause a duplicate. |
 | Durable state | Version 2 stores each rule's `Fingerprint`, `Active`, and optional `Pending{ObservedAt, Message}`. Invalid, unknown or case-variant keys and version 1 are rejected before market/notification HTTP; committed state remains unchanged. PostgreSQL JSONB validates JSON syntax and canonicalizes repeated keys before application reads. |
 | PostgreSQL | Missing/invalid connection settings and authentication failure, exclusive session ownership, a missing singleton, session loss before/after a send, restart, and a lost response after a server-confirmed COMMIT. |
 | CLI and dry-run | Real-binary argument and environment handling; obsolete file-state options fail explicitly; dry-run avoids DDL, application advisory locks, sends, and state changes. |
@@ -165,7 +181,9 @@ introduced; existing E2E is sufficient and model/formal methods remain deferred.
 Before implementation, account for rule reordering, symbol case and numeric-ID
 aliases, equivalent numeric spellings, different thresholds on the same coin,
 duplicate canonical definitions, changes to one rule, and legacy version-2 state
-with manual keys. Generated IDs reuse the full existing definition fingerprint;
+with manual keys. The full SHA-256 fingerprint includes source, currency,
+canonical coin ID, condition, threshold, window and rearm margin; comments and
+YAML spelling do not affect it. Generated IDs reuse this definition fingerprint;
 no rule ID is accepted in YAML. Unchanged definitions must preserve independent
 activity and pending messages across restart and reordering. Changed definitions
 start a new rule; removed state and its pending are discarded with a warning.

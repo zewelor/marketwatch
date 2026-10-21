@@ -213,7 +213,7 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 }
 
 func render(rule Rule, q quote) *Pending {
-	message := fmt.Sprintf("CoinLore: condition observed\nCoinLore ID %s; price %g USD\nCondition: ", rule.Coin, q.price)
+	message := fmt.Sprintf("%s: %g USD\nCondition: ", rule.Symbol, q.price)
 	switch rule.Condition {
 	case "above":
 		message += fmt.Sprintf("price >= %g USD", rule.Threshold)
@@ -224,8 +224,7 @@ func render(rule Rule, q quote) *Pending {
 		if rule.Window == "7d" {
 			change = q.week
 		}
-		message += fmt.Sprintf("absolute change >= %g%% (%s); provider change: %g%%", rule.Threshold, rule.Window, change)
+		message += fmt.Sprintf("absolute change >= %g%% (%s); change: %g%%", rule.Threshold, rule.Window, change)
 	}
-	message += "\nData fetched: " + q.fetchedAt.Format(time.RFC3339Nano) + "\nFetch time does not confirm price freshness."
 	return &Pending{ObservedAt: q.fetchedAt, Message: message}
 }

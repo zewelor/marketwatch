@@ -21,7 +21,8 @@ const priceMargin = 0.005
 
 type Rule struct {
 	ID        string
-	Coin      string  `yaml:"coin"`
+	Coin      string `yaml:"coin"`
+	Symbol    string
 	Threshold float64 `yaml:"threshold"`
 	Window    string  `yaml:"window,omitempty"`
 	Condition string
@@ -45,7 +46,7 @@ func normalizeID(id string) (string, error) {
 	if id == "" || strings.IndexFunc(id, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
 		return "", errors.New("coin must contain only decimal digits")
 	}
-	// No arbitrary numeric size limit: the API confirms existence.
+	// No arbitrary numeric size limit; catalog lookup validates existence.
 	id = strings.TrimLeft(id, "0")
 	if id == "" {
 		return "", errors.New("coin ID must be positive")
@@ -84,6 +85,10 @@ func loadConfig(path string) ([]Rule, error) {
 		if w.Coin == "" {
 			return nil, fmt.Errorf("rule %d: missing coin", index+1)
 		}
+		symbol, err := coinSymbol(string(w.Coin))
+		if err != nil {
+			return nil, fmt.Errorf("rule %d: %w", index+1, err)
+		}
 		condition := ""
 		threshold := 0.0
 		for _, field := range []struct {
@@ -121,7 +126,7 @@ func loadConfig(path string) ([]Rule, error) {
 		} else if w.Window.Kind != 0 {
 			return nil, fmt.Errorf("rule %d: price rule cannot have window", index+1)
 		}
-		rule := Rule{Coin: string(w.Coin), Threshold: threshold, Window: window, Condition: condition}
+		rule := Rule{Coin: string(w.Coin), Symbol: symbol, Threshold: threshold, Window: window, Condition: condition}
 		rule.ID = rule.fingerprint()
 		if seen[rule.ID] {
 			return nil, fmt.Errorf("rule %d: duplicate rule definition", index+1)
