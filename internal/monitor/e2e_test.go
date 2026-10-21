@@ -175,12 +175,18 @@ func TestE2EEpisodes(t *testing.T) {
 	if h.ids != "90,80" {
 		t.Fatalf("dedup/canonical IDs: %q", h.ids)
 	}
-	for _, m := range h.messages {
+	wantMessages := []string{
+		"BTC: 100 USD\nCondition: price >= 100 USD",
+		"ETH: 50 USD\nCondition: price <= 50 USD",
+		"BTC: 100 USD\nCondition: absolute change >= 5% (24h); change: 5%",
+		"ETH: 50 USD\nCondition: absolute change >= 10% (7d); change: -10%",
+	}
+	for i, m := range h.messages {
 		if m.Get("url") != "" || m.Get("url_title") != "" {
 			t.Error("unexpected attribution")
 		}
-		if m.Get("title") != "Marketwatch" || !strings.Contains(m.Get("message"), "CoinLore") || !strings.Contains(m.Get("message"), "USD") || !strings.Contains(m.Get("message"), "2026-10-07T12:00:00Z") || !strings.Contains(m.Get("message"), "condition observed") || !strings.Contains(m.Get("message"), "Data fetched:") || !strings.Contains(m.Get("message"), "Fetch time does not confirm price freshness.") {
-			t.Fatalf("message: %v", m)
+		if m.Get("title") != "Marketwatch" || m.Get("message") != wantMessages[i] {
+			t.Fatalf("message: %v; want %q", m, wantMessages[i])
 		}
 	}
 	h.beforePush = nil
@@ -207,8 +213,8 @@ func TestE2EEpisodes(t *testing.T) {
 	h.prices("100", "5", "0", "50", "0", "-10")
 	h.run(false)
 	h.sent(8)
-	if !strings.Contains(h.messages[4].Get("message"), "condition observed") {
-		t.Error("later episode must describe an observation")
+	if h.messages[4].Get("message") != wantMessages[0] {
+		t.Error("later episode must use the same concise format")
 	}
 	// YAML order and canonical spelling do not reset.
 	h.config("rules:\n - {coin: \"80\", threshold: 10, window: 7d}\n - {coin: \"90\", threshold: 5, window: 24h}\n - {coin: \"80\", below: 50}\n - {coin: \"90\", above: 100}\n")
@@ -274,7 +280,7 @@ func TestE2EExpiryAndConfigChange(t *testing.T) {
 	h.config("rules:\n - {coin: \"90\", threshold: 4, window: 24h}\n - {coin: \"90\", threshold: 5, window: 24h}\n")
 	h.run(false)
 	h.sent(2)
-	if len(h.state().Rules) != 2 || !strings.Contains(h.messages[1].Get("message"), "condition observed") {
+	if len(h.state().Rules) != 2 || h.messages[1].Get("message") != "BTC: 100 USD\nCondition: absolute change >= 4% (24h); change: 5%" {
 		t.Fatal("config reconciliation")
 	}
 }
@@ -318,6 +324,7 @@ func TestE2EInvalidConfigBeforeIO(t *testing.T) {
 		strings.Replace(oneRule, "threshold: 5", "threshold: 0", 1),
 		strings.Replace(oneRule, "coin: \"90\"", "coin: 90", 1),
 		strings.Replace(oneRule, "coin: \"90\"", "coin: \"0\"", 1),
+		strings.Replace(oneRule, "coin: \"90\"", "coin: \"999999999999999999\"", 1),
 		strings.Replace(oneRule, "window: 24h", "window: 24h, kind: up", 1),
 		strings.Replace(oneRule, "window: 24h", "window: 1h", 1),
 		strings.Replace(oneRule, ", window: 24h", "", 1),
@@ -790,7 +797,7 @@ func TestE2EBidirectionalMovement(t *testing.T) {
 			t.Fatalf("step %d: wrong activity", i)
 		}
 	}
-	if !strings.Contains(h.messages[1].Get("message"), "provider change: -3%") {
+	if !strings.Contains(h.messages[1].Get("message"), "change: -3%") {
 		t.Fatal("missing signed change")
 	}
 }

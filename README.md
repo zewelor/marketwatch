@@ -35,7 +35,8 @@ go run ./cmd/marketwatch check --config config/example.yaml --dry-run=false
 CoinLore does not require an API key. Write `coin: btc` or `coin: eth`; symbols are
 case-insensitive and resolved through a catalog embedded in the binary. Unknown
 symbols fail explicitly. For ambiguous symbols, use the quoted CoinLore ID shown
-in the error. Numeric IDs such as `"90"` remain supported.
+in the error. Numeric IDs such as `"90"` remain supported and must exist in the
+embedded catalog, which supplies the symbol displayed in notifications.
 
 Maintainers refresh the catalog from CoinLore `/api/assets/` with `just update-coins`
 (Python 3 required), review the diff, and rebuild. Checks do not download the catalog.
@@ -72,7 +73,11 @@ from its canonical definition. Reordering rules or writing `BTC`, `btc` or `"90"
 preserves their state. Identical definitions are rejected; different thresholds
 for the same coin are independent rules. Changing a definition creates a new rule
 and discards the old rule's state and pending notification with a warning. See the
-[example configuration](config/example.yaml) and [behavior specification](docs/spec.md).
+[example configuration](config/example.yaml).
+
+The YAML root requires a nonempty `rules` list. Unknown fields, duplicate keys,
+multiple YAML documents, null conditions and nonfinite thresholds are rejected
+before database or market/notification requests.
 
 An alert fires when an inactive rule meets its condition, including the first
 check. The rule rearms after its absolute change falls strictly below threshold minus
@@ -83,13 +88,25 @@ or below 0.5% rearm at exactly zero.
 Price rules use a rearm margin of 0.5% of their threshold: `above: 86000` rearms
 below 85570 USD; `below: 80000` rearms above 80400 USD. Each rule keeps its own
 episode, so high, low and percentage alerts can coexist.
+Comparisons use unrounded `float64` values. Missing or invalid market data leaves
+activity unchanged. Checks sample current conditions and can miss crossings
+between checks.
 
 A failed notification stays pending for up to three hours and is retried on the
-next check. A newer episode replaces an older pending alert. Notifications
-include the observation time; they may describe an earlier condition.
+next check. A newer episode replaces an older pending alert. Notifications show
+only the coin symbol, USD price and condition; percentage rules also show the
+signed change and window. Retried notifications may describe an earlier condition.
+Rearming preserves pending notifications. Each check attempts each pending alert
+at most once, using its original text even if current market data is unavailable.
+Expiry at three hours fails the check without resetting the rule's activity.
+
+```text
+BTC: 86000 USD
+Condition: price >= 86000 USD
+```
 
 CoinLore does not provide a price-update timestamp in the ticker response.
-The displayed fetch time does not confirm price freshness. Pushover acceptance
+The fetch time recorded in logs does not confirm price freshness. Pushover acceptance
 confirms API acceptance, not that a notification was read. A crash after acceptance
 but before saving state can produce a duplicate.
 
@@ -131,6 +148,11 @@ then to the base URL on success or `/fail` on any check error (including partial
 failures). Each ping has a two-second timeout, without retries or redirects.
 Healthchecks failures produce warnings and leave price checking and its exit code
 unaffected. Dry-run sends no pings. The URL is treated as a secret and is not logged.
+
+Market and notification requests run sequentially with a ten-second timeout per
+request and a 90-second check deadline. SIGINT/SIGTERM cancel the check. The final
+Healthchecks ping has its own two-second deadline, including after cancellation.
+CoinLore is the only market source; there is no automatic provider fallback.
 
 Logs are JSON. Exit code 0 means the check completed without errors; code 1 also
 covers partial provider failures, failed notifications and expired pending alerts.

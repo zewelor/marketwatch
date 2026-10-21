@@ -1,9 +1,10 @@
 # Repository guide
 
-- [docs/spec.md](docs/spec.md) is the sole behavior contract. Keep implementation
-  small and explicit: use flat packages, follow existing conventions, and apply
-  YAGNI. CoinLore is the only market data source and USD is fixed; do not add an
-  automatic provider fallback.
+- Keep user-facing behavior in [README.md](README.md) and verification coverage in
+  [docs/failure-scenarios.md](docs/failure-scenarios.md), updating them when behavior
+  changes. Keep implementation small and explicit: use flat packages, follow
+  existing conventions, and apply YAGNI. CoinLore is the only market data source
+  and USD is fixed; do not add an automatic provider fallback.
 - Fail on invalid or unexpected state. Do not reset corrupt state, and do not treat
   logs as proof that a notification was delivered. Preserve other contributors'
   changes. Commit, push, publish, or deploy only when the task explicitly

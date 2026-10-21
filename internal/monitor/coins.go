@@ -21,8 +21,20 @@ type coinCatalogEntry struct {
 var (
 	coinCatalogOnce sync.Once
 	coinCatalog     map[string][]string
+	coinSymbols     map[string]string
 	coinCatalogErr  error
 )
+
+func coinSymbol(id string) (string, error) {
+	if _, err := loadCoinCatalog(); err != nil {
+		return "", err
+	}
+	symbol, ok := coinSymbols[id]
+	if !ok {
+		return "", fmt.Errorf("unknown coin ID %q; refresh the embedded catalog with scripts/update-coins.py", id)
+	}
+	return symbol, nil
+}
 
 func resolveCoin(value string) (string, error) {
 	id, err := normalizeID(value)
@@ -65,14 +77,14 @@ func loadCoinCatalog() (map[string][]string, error) {
 		}
 
 		bySymbol := make(map[string][]string)
-		seenIDs := make(map[string]struct{}, len(entries))
+		byID := make(map[string]string, len(entries))
 		for index, entry := range entries {
 			id, err := normalizeID(entry.ID)
 			if err != nil || id != entry.ID {
 				coinCatalogErr = fmt.Errorf("invalid embedded CoinLore catalog: row %d has invalid ID", index)
 				return
 			}
-			if _, exists := seenIDs[id]; exists {
+			if _, exists := byID[id]; exists {
 				coinCatalogErr = fmt.Errorf("invalid embedded CoinLore catalog: duplicate ID %s", id)
 				return
 			}
@@ -80,14 +92,15 @@ func loadCoinCatalog() (map[string][]string, error) {
 				coinCatalogErr = fmt.Errorf("invalid embedded CoinLore catalog: row %d has empty symbol", index)
 				return
 			}
-			seenIDs[id] = struct{}{}
 			key := strings.ToUpper(entry.Symbol)
 			bySymbol[key] = append(bySymbol[key], id)
+			byID[id] = key
 		}
 		for key := range bySymbol {
 			bySymbol[key] = sortedNumericIDs(bySymbol[key])
 		}
 		coinCatalog = bySymbol
+		coinSymbols = byID
 	})
 	return coinCatalog, coinCatalogErr
 }
