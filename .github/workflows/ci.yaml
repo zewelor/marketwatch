@@ -37,7 +37,7 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: Format
-        run: test -z "$(gofmt -l cmd internal)"
+        run: test -z "$(gofmt -l cmd internal scripts)"
       # Go checks share a cache and remain sequential; Dockerfile lint is independent.
       - parallel:
           - name: Verify Go and build binaries

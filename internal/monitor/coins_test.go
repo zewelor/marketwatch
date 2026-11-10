@@ -16,7 +16,7 @@ func TestResolveCoin(t *testing.T) {
 		{name: "ethereum mixed case", input: "EtH", want: "80"},
 		{name: "numeric ID canonicalized", input: "00090", want: "90"},
 		{name: "zero ID rejected", input: "0", wantErr: "positive"},
-		{name: "unknown symbol is actionable", input: "not-a-coin", wantErr: "scripts/update-coins.py"},
+		{name: "unknown symbol is actionable", input: "not-a-coin", wantErr: "just update-coins"},
 	}
 
 	for _, tt := range tests {

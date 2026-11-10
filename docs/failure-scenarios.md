@@ -134,6 +134,20 @@ and the delivery guarantees are unchanged.
 
 ## Weekly catalog refresh workflow
 
+Before changing refresh, account for a known ID changing symbol, multiple changed
+IDs, new or removed IDs, and a missing or corrupt existing snapshot, including
+noncanonical IDs such as `01`, invalid JSON and unsupported encodings. Reject
+invalid UTF-8 in both existing catalogs and downloaded responses before decoding;
+reject duplicate JSON object names and unpaired Unicode surrogate escapes.
+Preserve valid Unicode, paired surrogates and a genuine replacement character. Runtime
+and refresh must use the same catalog validation. A changed symbol must stop the
+refresh with the ID and old/new values before any write;
+the previous snapshot must remain intact. New and removed IDs remain reviewable
+catalog changes. Comparison uses the existing file on disk (the default-branch
+snapshot in the workflow), not live prices.
+Property-based and formal methods are deferred: this is a deterministic comparison
+without new concurrent state; targeted scenarios cover its failure boundaries.
+
 Before adding automation, account for download/schema failure, no changes,
 concurrent scheduled/manual runs, an existing update PR, and disabled repository
 PR creation. Refresh and validation run with read-only permissions; only the
@@ -142,6 +156,14 @@ refresh must not publish a partial catalog. Use one stable update branch so late
 runs update the same PR, and serialize runs. Without changes, create no PR.
 GitHub-hosted permission and PR behavior requires a real run after publication;
 local validation covers workflow structure and the existing updater/resolver.
+
+## Disposable PostgreSQL for local tests
+
+The Compose fixture must expose PostgreSQL only on loopback, wait for readiness,
+and use disposable storage so tests cannot retain state after the container stops.
+Verify the documented connection settings with the full PostgreSQL-backed suite,
+including a custom port when the default is occupied. A conflicting port or failed
+startup must stop the workflow visibly; do not fall back to another database.
 
 ## Price thresholds alongside percentage movement
 

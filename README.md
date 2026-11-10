@@ -39,7 +39,11 @@ in the error. Numeric IDs such as `"90"` remain supported and must exist in the
 embedded catalog, which supplies the symbol displayed in notifications.
 
 Maintainers refresh the catalog from CoinLore `/api/assets/` with `just update-coins`
-(Python 3 required), review the diff, and rebuild. Checks do not download the catalog.
+(Go toolchain required), review the diff, and rebuild. Checks do not download the catalog.
+The refresh fails without replacing the snapshot if an existing ID changes symbol;
+the error lists the ID and both symbols. Verify such changes with CoinLore before
+manually updating the snapshot and retrying. New and removed IDs remain part of the
+normal diff review. This guard does not validate live ticker prices.
 
 The `Update coin catalog` GitHub Actions workflow runs on Mondays at 06:17 UTC
 and can also be started manually. It creates or updates one PR when the catalog
@@ -281,25 +285,23 @@ Tests require a disposable PostgreSQL 18+ database. Set
 `MARKETWATCH_TEST_POSTGRES=1`, `DB_HOST` to a loopback address, `DB_NAME` to
 `marketwatch_test`, and `DB_USER`/`DB_PASSWORD` to disposable credentials;
 `DB_PORT` defaults to `5432`. Tests fail when the required database is unavailable
-instead of skipping PostgreSQL coverage. For example, start a local test server:
+instead of skipping PostgreSQL coverage. Start the disposable local database:
 
 ```sh
-docker run --rm --detach --name marketwatch-postgres-test \
-  -e POSTGRES_USER=marketwatch_test \
-  -e POSTGRES_PASSWORD=marketwatch_test \
-  -e POSTGRES_DB=marketwatch_test \
-  -p 127.0.0.1:15432:5432 \
-  --tmpfs /var/lib/postgresql:rw \
-  postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
+docker compose -f compose.dev.yaml up --wait
 ```
 
-Set `DB_HOST=127.0.0.1`, `DB_PORT=15432`, `DB_NAME=marketwatch_test`,
-`DB_USER=marketwatch_test`, `DB_PASSWORD=marketwatch_test`, and
-`DB_SSLMODE=disable` for this disposable local instance, then run:
+Run verification against it using the test-only credentials:
 
 ```sh
-MARKETWATCH_TEST_POSTGRES=1 just verify
+MARKETWATCH_TEST_POSTGRES=1 DB_HOST=127.0.0.1 DB_PORT=15432 \
+  DB_NAME=marketwatch_test DB_USER=marketwatch_test DB_PASSWORD=marketwatch_test \
+  DB_SSLMODE=disable just verify
 ```
+
+If port 15432 is occupied, set `MARKETWATCH_TEST_PORT` when starting Compose and
+use the same value for `DB_PORT` when running tests. If you override
+`MARKETWATCH_TEST_PASSWORD`, use the same value for `DB_PASSWORD`.
 
 This runs formatting checks, `go vet`, PostgreSQL-backed E2E tests with the race
 detector, CLI smoke tests and static Linux amd64/arm64 builds. `just test` runs
@@ -307,7 +309,8 @@ tests without retaining artifacts; `just e2e` keeps logs and state snapshots in
 `artifacts/e2e/`.
 
 Stop and remove the disposable server after testing with
-`docker stop marketwatch-postgres-test`.
+`docker compose -f compose.dev.yaml down`. Its data is kept in temporary
+memory and is lost when the container stops.
 
 CI runs the Go checks alongside Dockerfile lint, builds images for both
 architectures and uploads E2E artifacts. The catalog workflow opens update PRs;
