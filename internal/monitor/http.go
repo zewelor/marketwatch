@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"marketwatch/internal/catalog"
 )
 
 const maxResponse = 4 << 20
@@ -86,7 +88,7 @@ func (r *Runner) fetch(ctx context.Context, rules []Rule) (map[string]quote, err
 		if err := json.Unmarshal(row["id"], &id); err != nil {
 			continue
 		}
-		id, err = normalizeID(id)
+		id, err = catalog.NormalizeID(id)
 		if err != nil || !wanted[id] {
 			continue
 		}

@@ -1,7 +1,7 @@
 set shell := ["sh", "-eu", "-c"]
 
 fmt:
-    gofmt -w cmd internal
+    gofmt -w cmd internal scripts
 
 test:
     go test ./... -count=1
@@ -11,7 +11,7 @@ e2e:
     MARKETWATCH_ARTIFACT_DIR="{{justfile_directory()}}/artifacts/e2e" go test -race ./... -count=1 -json > artifacts/e2e/results.jsonl
 
 verify:
-    test -z "$(gofmt -l cmd internal)"
+    test -z "$(gofmt -l cmd internal scripts)"
     go vet ./...
     just e2e
     just build
@@ -46,4 +46,4 @@ show_dockerignore:
 
 # Refresh the embedded symbol catalog, then review the diff and rebuild.
 update-coins:
-    python3 scripts/update-coins.py
+    go run ./scripts

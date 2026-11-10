@@ -11,7 +11,6 @@ import (
 	"math"
 	"os"
 	"strconv"
-	"strings"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -41,17 +40,6 @@ func (id *coinID) UnmarshalYAML(n *yaml.Node) error {
 	}
 	*id = coinID(canonical)
 	return nil
-}
-func normalizeID(id string) (string, error) {
-	if id == "" || strings.IndexFunc(id, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
-		return "", errors.New("coin must contain only decimal digits")
-	}
-	// No arbitrary numeric size limit; catalog lookup validates existence.
-	id = strings.TrimLeft(id, "0")
-	if id == "" {
-		return "", errors.New("coin ID must be positive")
-	}
-	return id, nil
 }
 func loadConfig(path string) ([]Rule, error) {
 	data, err := os.ReadFile(path)

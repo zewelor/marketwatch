@@ -2,21 +2,16 @@ package monitor
 
 import (
 	_ "embed"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"sync"
+
+	"marketwatch/internal/catalog"
 )
 
 //go:embed coins.json
 var coinCatalogData []byte
-
-type coinCatalogEntry struct {
-	ID     string `json:"id"`
-	Symbol string `json:"symbol"`
-}
 
 var (
 	coinCatalogOnce sync.Once
@@ -31,13 +26,13 @@ func coinSymbol(id string) (string, error) {
 	}
 	symbol, ok := coinSymbols[id]
 	if !ok {
-		return "", fmt.Errorf("unknown coin ID %q; refresh the embedded catalog with scripts/update-coins.py", id)
+		return "", fmt.Errorf("unknown coin ID %q; refresh the embedded catalog with just update-coins", id)
 	}
 	return symbol, nil
 }
 
 func resolveCoin(value string) (string, error) {
-	id, err := normalizeID(value)
+	id, err := catalog.NormalizeID(value)
 	if err == nil {
 		return id, nil
 	}
@@ -56,7 +51,7 @@ func resolveCoinFromCatalog(value string, catalog map[string][]string) (string, 
 	ids := catalog[strings.ToUpper(value)]
 	switch len(ids) {
 	case 0:
-		return "", fmt.Errorf("unknown coin symbol %q; refresh the embedded catalog with scripts/update-coins.py", value)
+		return "", fmt.Errorf("unknown coin symbol %q; refresh the embedded catalog with just update-coins", value)
 	case 1:
 		return ids[0], nil
 	default:
@@ -66,32 +61,16 @@ func resolveCoinFromCatalog(value string, catalog map[string][]string) (string, 
 
 func loadCoinCatalog() (map[string][]string, error) {
 	coinCatalogOnce.Do(func() {
-		var entries []coinCatalogEntry
-		if err := json.Unmarshal(coinCatalogData, &entries); err != nil {
+		entries, err := catalog.Parse(coinCatalogData)
+		if err != nil {
 			coinCatalogErr = fmt.Errorf("invalid embedded CoinLore catalog: %w", err)
-			return
-		}
-		if len(entries) == 0 {
-			coinCatalogErr = errors.New("invalid embedded CoinLore catalog: empty catalog")
 			return
 		}
 
 		bySymbol := make(map[string][]string)
 		byID := make(map[string]string, len(entries))
-		for index, entry := range entries {
-			id, err := normalizeID(entry.ID)
-			if err != nil || id != entry.ID {
-				coinCatalogErr = fmt.Errorf("invalid embedded CoinLore catalog: row %d has invalid ID", index)
-				return
-			}
-			if _, exists := byID[id]; exists {
-				coinCatalogErr = fmt.Errorf("invalid embedded CoinLore catalog: duplicate ID %s", id)
-				return
-			}
-			if strings.TrimSpace(entry.Symbol) == "" {
-				coinCatalogErr = fmt.Errorf("invalid embedded CoinLore catalog: row %d has empty symbol", index)
-				return
-			}
+		for _, entry := range entries {
+			id := entry.ID
 			key := strings.ToUpper(entry.Symbol)
 			bySymbol[key] = append(bySymbol[key], id)
 			byID[id] = key

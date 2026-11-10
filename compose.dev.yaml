@@ -1,0 +1,19 @@
+# Disposable database for local tests; this is not a deployment configuration.
+name: marketwatch-test
+
+services:
+  postgres:
+    image: postgres:18@sha256:74935e72241653ca55e0414067e6d8763aceb8a810eb51b452253ec3dcfc4336
+    environment:
+      POSTGRES_DB: marketwatch_test
+      POSTGRES_USER: marketwatch_test
+      POSTGRES_PASSWORD: ${MARKETWATCH_TEST_PASSWORD:-marketwatch_test}
+    ports:
+      - "127.0.0.1:${MARKETWATCH_TEST_PORT:-15432}:5432"
+    tmpfs:
+      - /var/lib/postgresql
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "marketwatch_test", "-d", "marketwatch_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
