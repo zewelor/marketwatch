@@ -19,16 +19,27 @@ import (
 )
 
 const (
-	assetsURL  = "https://api.coinlore.net/api/assets/"
-	outputPath = "internal/monitor/coins.json"
-	maxBytes   = 4 << 20
+	assetsURL       = "https://api.coinlore.net/api/assets/"
+	outputPath      = "internal/monitor/coins.json"
+	maxBytes        = 4 << 20
+	blockedExitCode = 42
 )
 
 func main() {
-	if err := refresh(context.Background(), newClient(), assetsURL, outputPath); err != nil {
-		fmt.Fprintln(os.Stderr, "update CoinLore catalog failed:", err)
-		os.Exit(1)
+	os.Exit(run(context.Background(), newClient(), assetsURL, outputPath, os.Stderr))
+}
+
+func run(ctx context.Context, client *http.Client, url, path string, stderr io.Writer) int {
+	if err := refresh(ctx, client, url, path); err != nil {
+		var blocked *symbolChangesError
+		if errors.As(err, &blocked) {
+			fmt.Fprintln(stderr, "update CoinLore catalog paused:", err)
+			return blockedExitCode
+		}
+		fmt.Fprintln(stderr, "update CoinLore catalog failed:", err)
+		return 1
 	}
+	return 0
 }
 
 func newClient() *http.Client {
@@ -116,6 +127,12 @@ func fetchCatalog(ctx context.Context, client *http.Client, url string) ([]catal
 	return payload.Data, nil
 }
 
+type symbolChangesError struct{ changes []string }
+
+func (e *symbolChangesError) Error() string {
+	return "existing coin symbols changed; review CoinLore data: " + strings.Join(e.changes, "; ")
+}
+
 func checkSymbolChanges(old, coins []catalog.Entry) error {
 	oldSymbols := make(map[string]string, len(old))
 	for _, coin := range old {
@@ -128,7 +145,7 @@ func checkSymbolChanges(old, coins []catalog.Entry) error {
 		}
 	}
 	if len(changes) > 0 {
-		return fmt.Errorf("existing coin symbols changed; review CoinLore data: %s", strings.Join(changes, "; "))
+		return &symbolChangesError{changes: changes}
 	}
 	return nil
 }

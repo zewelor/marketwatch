@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -27,6 +29,10 @@ func TestCatalogRefreshSequence(t *testing.T) {
 	err := refresh(context.Background(), newClient(), server.URL, path)
 	if err == nil || !strings.Contains(err.Error(), `1: "LTC" -> "X"`) || !strings.Contains(err.Error(), `2: "DOGE" -> "Y"`) {
 		t.Fatalf("expected both symbol changes, got %v", err)
+	}
+	var blocked *symbolChangesError
+	if !errors.As(err, &blocked) {
+		t.Fatalf("symbol changes must have a distinct result, got %v", err)
 	}
 	assertFile(t, path, old)
 	t.Logf("changed symbols rejected: %v", err)
@@ -195,4 +201,137 @@ func newCatalogFile(t *testing.T, data []byte) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// The wrapper executes this test binary as a separate process, exercising the
+// same run function and exit codes as the production updater.
+func TestWorkflowFixtureProcess(t *testing.T) {
+	if os.Getenv("MARKETWATCH_WORKFLOW_FIXTURE") != "1" {
+		return
+	}
+	os.Exit(run(context.Background(), newClient(), os.Getenv("MARKETWATCH_FIXTURE_URL"), os.Getenv("MARKETWATCH_FIXTURE_PATH"), os.Stderr))
+}
+
+func TestWorkflowRefreshOutcomes(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		status        int
+		body          string
+		old           string
+		wantExit      int
+		wantReady     string
+		wantSummary   string
+		wantUnchanged bool
+	}{
+		{"symbol_change", 200, `{"data":[{"id":"1","symbol":"X"}]}`, `[{"id":"1","symbol":"LTC"}]`, 0, "ready=false\n", `1: "LTC" -> "X"`, true},
+		{"success", 200, `{"data":[{"id":"1","symbol":"LTC"},{"id":"2","symbol":"DOGE"}]}`, `[{"id":"1","symbol":"LTC"}]`, 0, "ready=true\n", "", false},
+		{"server_error", 503, "unavailable", `[{"id":"1","symbol":"LTC"}]`, 1, "", "", true},
+		{"malformed_response", 200, `{"data":`, `[{"id":"1","symbol":"LTC"}]`, 1, "", "", true},
+		{"invalid_existing_catalog", 200, `{"data":[{"id":"1","symbol":"LTC"}]}`, `[{"id":"01","symbol":"LTC"}]`, 1, "", "", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tc.status)
+				fmt.Fprint(w, tc.body)
+			}))
+			defer server.Close()
+			path := newCatalogFile(t, []byte(tc.old))
+			dir := t.TempDir()
+			output := filepath.Join(dir, "output")
+			summary := filepath.Join(dir, "summary")
+			for _, file := range []string{output, summary} {
+				if err := os.WriteFile(file, nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			executable, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			helper := filepath.Join(dir, "updater")
+			if err := os.WriteFile(helper, []byte("#!/bin/sh\nexec \"$MARKETWATCH_FIXTURE_BINARY\" -test.run '^TestWorkflowFixtureProcess$'\n"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command("sh", "refresh-workflow.sh", helper)
+			cmd.Env = append(os.Environ(), "MARKETWATCH_WORKFLOW_FIXTURE=1", "MARKETWATCH_FIXTURE_BINARY="+executable, "MARKETWATCH_FIXTURE_URL="+server.URL, "MARKETWATCH_FIXTURE_PATH="+path, "GITHUB_OUTPUT="+output, "GITHUB_STEP_SUMMARY="+summary)
+			logs, err := cmd.CombinedOutput()
+			exit := 0
+			if err != nil {
+				var exitErr *exec.ExitError
+				if !errors.As(err, &exitErr) {
+					t.Fatal(err)
+				}
+				exit = exitErr.ExitCode()
+			}
+			if exit != tc.wantExit {
+				t.Fatalf("exit=%d want %d; logs: %s", exit, tc.wantExit, logs)
+			}
+			ready, err := os.ReadFile(output)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(ready) != tc.wantReady {
+				t.Fatalf("output=%q want %q; logs: %s", ready, tc.wantReady, logs)
+			}
+			report, err := os.ReadFile(summary)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.wantSummary != "" && !strings.Contains(string(report), tc.wantSummary) {
+				t.Fatalf("summary=%q want %q", report, tc.wantSummary)
+			}
+			if tc.wantSummary == "" && len(report) != 0 {
+				t.Fatalf("unexpected summary: %s", report)
+			}
+			if tc.wantUnchanged {
+				assertFile(t, path, []byte(tc.old))
+			} else {
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				entries, err := catalog.Parse(data)
+				if err != nil || len(entries) != 2 || entries[1].Symbol != "DOGE" {
+					t.Fatalf("unexpected catalog %s: %v", data, err)
+				}
+			}
+			t.Logf("exit=%d output=%q summary=%q logs=%q", exit, ready, report, logs)
+		})
+	}
+}
+
+func TestWorkflowDoesNotSuppressUnexpectedExit(t *testing.T) {
+	dir := t.TempDir()
+	helper := filepath.Join(dir, "crashed-updater")
+	if err := os.WriteFile(helper, []byte("#!/bin/sh\nexit 2\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(dir, "output")
+	cmd := exec.Command("sh", "refresh-workflow.sh", helper)
+	cmd.Env = append(os.Environ(), "GITHUB_OUTPUT="+output, "GITHUB_STEP_SUMMARY="+filepath.Join(dir, "summary"))
+	logs, err := cmd.CombinedOutput()
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 2 {
+		t.Fatalf("expected exit 2, got %v; logs: %s", err, logs)
+	}
+	if _, err := os.Stat(output); !os.IsNotExist(err) {
+		t.Fatalf("unexpected workflow output: %v", err)
+	}
+}
+
+func TestWorkflowFailsWhenOutputCannotBeWritten(t *testing.T) {
+	for _, status := range []int{0, blockedExitCode} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			dir := t.TempDir()
+			helper := filepath.Join(dir, "updater")
+			if err := os.WriteFile(helper, []byte(fmt.Sprintf("#!/bin/sh\nexit %d\n", status)), 0700); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command("sh", "refresh-workflow.sh", helper)
+			cmd.Env = append(os.Environ(), "GITHUB_OUTPUT="+filepath.Join(dir, "missing", "output"), "GITHUB_STEP_SUMMARY="+filepath.Join(dir, "summary"))
+			if logs, err := cmd.CombinedOutput(); err == nil {
+				t.Fatalf("workflow succeeded without recording its result; logs: %s", logs)
+			}
+		})
+	}
 }

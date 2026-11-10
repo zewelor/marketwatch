@@ -48,6 +48,10 @@ normal diff review. This guard does not validate live ticker prices.
 The `Update coin catalog` GitHub Actions workflow runs on Mondays at 06:17 UTC
 and can also be started manually. It creates or updates one PR when the catalog
 differs from the default branch; changes require review and merging, then a rebuild.
+If a known ID changes symbol, the workflow reports a paused refresh in its summary
+and skips the PR. Other errors fail the workflow. The standalone updater exits with
+code 42 for symbol changes and code 1 for other failures (`go run` reports nonzero
+program exits as code 1).
 Enable **Allow GitHub Actions to create and approve pull requests** under
 **Settings → Actions → General → Workflow permissions**. The workflow uses only
 the built-in `GITHUB_TOKEN`; approve pending CI runs on its PR before merging.
