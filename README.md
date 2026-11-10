@@ -316,11 +316,24 @@ Stop and remove the disposable server after testing with
 `docker compose -f compose.dev.yaml down`. Its data is kept in temporary
 memory and is lost when the container stops.
 
-CI runs the Go checks alongside Dockerfile lint, builds images for both
-architectures and uploads E2E artifacts. The catalog workflow opens update PRs;
-After successful verification of a push to `main`, a separate job publishes
-images to GHCR and cleans up older versions. Pull requests and other branches
-do not publish. Main runs finish publication and cleanup before the next begins.
+The application CI workflow runs for changes to `cmd/`, `internal/`, Go
+dependencies, Docker inputs, its workflow or `droast.toml`. It runs all Go tests,
+builds binaries and images, and publishes to GHCR only after successful
+verification on `main`. The existing catalog workflow also runs for `scripts/`,
+development Compose and its own workflow changes; it tests `./scripts` without
+PostgreSQL and validates Compose. Only scheduled/manual catalog runs proceed to
+refresh and PR creation, after those same tool checks. Documentation-only changes
+run neither workflow. Catalog verification is isolated by event and ref; scheduled
+and manual refreshes share a queue and do not cancel an active refresh. Mixed
+application/tool changes can run both; shared code and dependency changes run
+application CI, which also tests the tools.
+
+Each workflow defines its paths once with a YAML anchor shared by its push and
+pull-request triggers. Update the application paths when changing Dockerfile COPY
+inputs. The catalog workflow opens update PRs. Commits outside the application
+paths create no image tag; the last published image remains available. Pull
+requests and other branches do not publish. Main application runs finish
+publication and cleanup before the next begins.
 See [testing and failure scenarios](docs/failure-scenarios.md) for coverage and
 additional container checks.
 

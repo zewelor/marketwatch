@@ -167,6 +167,31 @@ successful and failed responses, and retain the existing snapshot on both errors
 Controlled scenarios cover these explicit branches; property/model-based and formal
 methods remain deferred because there is no new concurrency or persisted state.
 
+## CI path filters
+
+Application and catalog workflows use native push/pull-request path filters, with
+one anchored list per workflow. Runtime/shared code, embedded catalogs,
+dependencies, Docker inputs, the application workflow and lint configuration
+must select the application pipeline. Updater code, development Compose and
+catalog-workflow changes select tool checks in the existing catalog workflow.
+Push/PR runs must check their event revision, skip live downloads and never create
+a catalog PR. Schedule/manual runs must check the default branch and pass the same
+tool checks before downloading. No workflow depends on a separate workflow:
+publication needs application verification; PR creation needs a ready catalog.
+Catalog verification runs must use event/ref-specific concurrency groups so
+unrelated PRs and branches cannot replace each other's pending checks or a pending
+refresh. Scheduled/manual refreshes share one group and do not cancel an active
+refresh; verification may cancel obsolete runs for the same event/ref.
+Documentation-only changes
+select neither. Mixed changes may select both; application CI includes the tools
+tests so shared-code/dependency updates still validate them. Verify representative
+path sets against the actual YAML lists. GitHub evaluates event diffs and file
+renames; local simulations cannot prove hosted triggering or timing. Reassess
+branch protection before requiring a path-filtered workflow, since a filtered
+required check can remain pending. Native filters also inherit GitHub's
+[diff limits](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#git-diff-comparisons)
+for very large pushes and pull requests.
+
 ## Disposable PostgreSQL for local tests
 
 The Compose fixture must expose PostgreSQL only on loopback, wait for readiness,

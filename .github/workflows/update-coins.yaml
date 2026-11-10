@@ -1,12 +1,20 @@
 name: Update coin catalog
 on:
+  push:
+    paths: &tool_paths
+      - 'scripts/**'
+      - 'compose.dev.yaml'
+      - '.github/workflows/update-coins.yaml'
+  pull_request:
+    paths: *tool_paths
   schedule:
     - cron: '17 6 * * 1' # Monday, 06:17 UTC
   workflow_dispatch:
 permissions: {}
 concurrency:
-  group: update-coins
-  cancel-in-progress: false
+  # Only scheduled/manual runs share the catalog update queue.
+  group: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 'update-coins' || format('update-coins-{0}-{1}', github.event_name, github.ref) }}
+  cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
 jobs:
   refresh:
     runs-on: ubuntu-24.04
@@ -18,15 +26,30 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && github.event.repository.default_branch || github.sha }}
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: true
+      - name: Verify tools
+        run: |
+          test -z "$(gofmt -l scripts)"
+          go vet ./scripts
+          mkdir -p artifacts/e2e
+          MARKETWATCH_ARTIFACT_DIR="$PWD/artifacts/e2e" go test -race ./scripts -count=1 -json > artifacts/e2e/results.jsonl
+          docker compose --env-file /dev/null -f compose.dev.yaml config --quiet
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: tools-e2e
+          path: artifacts/e2e
+          if-no-files-found: error
       - name: Build catalog updater
+        if: &refresh_event github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
         run: go build -o "$RUNNER_TEMP/update-coins" ./scripts
       - name: Refresh catalog
+        if: *refresh_event
         id: refresh
         run: sh scripts/refresh-workflow.sh "$RUNNER_TEMP/update-coins"
       - name: Verify resolution
@@ -42,7 +65,7 @@ jobs:
           retention-days: 7
   pull-request:
     needs: refresh
-    if: needs.refresh.outputs.ready == 'true'
+    if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && needs.refresh.outputs.ready == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

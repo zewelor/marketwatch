@@ -1,7 +1,17 @@
 name: verify
 on:
   push:
+    paths: &application_paths
+      - 'cmd/**'
+      - 'internal/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'droast.toml'
+      - '.github/workflows/ci.yaml'
   pull_request:
+    paths: *application_paths
 permissions: {}
 concurrency:
   group: verify-${{ github.ref }}
