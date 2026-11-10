@@ -13,6 +13,8 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+    outputs:
+      ready: ${{ steps.refresh.outputs.ready }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -22,11 +24,17 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - name: Refresh catalog and verify resolution
+      - name: Build catalog updater
+        run: go build -o "$RUNNER_TEMP/update-coins" ./scripts
+      - name: Refresh catalog
+        id: refresh
+        run: sh scripts/refresh-workflow.sh "$RUNNER_TEMP/update-coins"
+      - name: Verify resolution
+        if: steps.refresh.outputs.ready == 'true'
         run: |
-          go run ./scripts
           go test ./internal/monitor -run '^TestResolveCoin' -count=1
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.refresh.outputs.ready == 'true'
         with:
           name: coin-catalog
           path: internal/monitor/coins.json
@@ -34,6 +42,7 @@ jobs:
           retention-days: 7
   pull-request:
     needs: refresh
+    if: needs.refresh.outputs.ready == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:

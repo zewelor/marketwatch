@@ -157,6 +157,16 @@ runs update the same PR, and serialize runs. Without changes, create no PR.
 GitHub-hosted permission and PR behavior requires a real run after publication;
 local validation covers workflow structure and the existing updater/resolver.
 
+When CoinLore changes the symbol of an existing ID, classify that result separately
+from errors: preserve the catalog, show the changes, finish the refresh job without
+failure and skip tests, artifact upload and PR creation. Successful refreshes must
+still validate and publish their artifact; download, parsing, validation, build,
+test, output and write failures must fail rather than be classified as blocked.
+Exercise the executable and workflow wrapper with a local HTTP server for blocked,
+successful and failed responses, and retain the existing snapshot on both errors.
+Controlled scenarios cover these explicit branches; property/model-based and formal
+methods remain deferred because there is no new concurrency or persisted state.
+
 ## Disposable PostgreSQL for local tests
 
 The Compose fixture must expose PostgreSQL only on loopback, wait for readiness,
