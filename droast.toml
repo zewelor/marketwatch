@@ -1,0 +1,3 @@
+# Marketwatch runs a scheduled one-shot check: it has no listening port or
+# long-running container process to probe.
+skip = ["DF012", "DF022"]
