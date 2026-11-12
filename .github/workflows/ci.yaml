@@ -9,7 +9,8 @@ on:
       - 'Dockerfile'
       - '.dockerignore'
       - 'droast.toml'
-      - '.github/workflows/ci.yaml'
+      - '.github/workflows/**'
+      - 'renovate.json'
   pull_request:
     paths: *application_paths
 permissions: {}
