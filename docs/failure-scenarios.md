@@ -1,5 +1,16 @@
 # E2E and failure scenarios
 
+## YAML v4 migration
+
+Preserve rejection of unknown or duplicate fields, multiple documents, unquoted
+numeric coin selectors, and invalid condition values before database, market or
+notification I/O.
+Move the custom coin selector hook and its node types to the same v4 import.
+Equivalent YAML spellings must keep the same rule fingerprints and persisted state.
+Reuse the existing invalid-configuration, automatic-fingerprint and CLI E2E cases,
+then run the full PostgreSQL-backed verification. No state or concurrency contract
+changes, so additional model-based or formal coverage is not warranted here.
+
 ## Concise notification text
 
 Before implementation, account for symbols and numeric coin selectors, above/below
