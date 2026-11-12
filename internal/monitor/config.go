@@ -12,7 +12,7 @@ import (
 	"os"
 	"strconv"
 
-	"go.yaml.in/yaml/v3"
+	"go.yaml.in/yaml/v4"
 )
 
 const changeMargin = 0.5
