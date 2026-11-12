@@ -46,6 +46,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Check Go module files
+        run: go mod tidy -diff
       - name: Format
         run: test -z "$(gofmt -l cmd internal scripts)"
       # Go checks share a cache and remain sequential; Dockerfile lint is independent.
