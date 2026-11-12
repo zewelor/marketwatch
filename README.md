@@ -9,7 +9,7 @@ USD; percentage-change rules use CoinLore's 24h or 7d values.
 
 ## Quick start
 
-Requires Go 1.27.1 and PostgreSQL 18 or newer. Set `DB_HOST`, `DB_NAME`, `DB_USER`
+Requires Go 1.27.4 and PostgreSQL 18 or newer. Set `DB_HOST`, `DB_NAME`, `DB_USER`
 and `DB_PASSWORD` for a direct PostgreSQL read/write endpoint. `DB_PORT` defaults
 to `5432`; `DB_SSLMODE` defaults to `require`. For a local database without TLS,
 set `DB_SSLMODE=disable`. Edit the illustrative thresholds in
