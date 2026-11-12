@@ -5,5 +5,14 @@
     "config:recommended",
     "github>zewelor/renovate-config//presets/github-actions",
     "github>zewelor/renovate-config//presets/go"
+  ],
+  "packageRules": [
+    {
+      "description": "Automerge PostgreSQL image digest updates after CI",
+      "matchDatasources": ["docker"],
+      "matchDepNames": ["postgres"],
+      "matchUpdateTypes": ["digest"],
+      "automerge": true
+    }
   ]
 }
