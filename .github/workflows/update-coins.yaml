@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'push' || github.event_name == 'pull_request' }}
 jobs:
   refresh:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
@@ -66,7 +66,7 @@ jobs:
   pull-request:
     needs: refresh
     if: (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && needs.refresh.outputs.ready == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: write
