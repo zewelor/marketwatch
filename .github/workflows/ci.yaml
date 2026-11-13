@@ -1,6 +1,7 @@
 name: verify
 on:
   push:
+    branches: [main]
     paths: &application_paths
       - 'cmd/**'
       - 'internal/**'
@@ -9,17 +10,15 @@ on:
       - 'Dockerfile'
       - '.dockerignore'
       - 'droast.toml'
-      - '.github/workflows/**'
-      - 'renovate.json'
+      - '.github/workflows/ci.yaml'
   pull_request:
     paths: *application_paths
 permissions: {}
-concurrency:
-  group: verify-${{ github.ref }}
-  # Let main publication and cleanup finish; replace obsolete PR/branch checks.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.ref != 'refs/heads/main' }}
 jobs:
   verify:
+    concurrency:
+      group: verify-${{ github.ref }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
@@ -99,6 +98,9 @@ jobs:
           cache-from: type=gha,scope=marketwatch
           cache-to: type=gha,scope=marketwatch,mode=max
   publish:
+    concurrency:
+      group: publish-main
+      cancel-in-progress: false
     needs: verify
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
