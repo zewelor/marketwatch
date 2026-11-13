@@ -1,6 +1,7 @@
 name: Update coin catalog
 on:
   push:
+    branches: [main]
     paths: &tool_paths
       - 'scripts/**'
       - 'compose.dev.yaml'

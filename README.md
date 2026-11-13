@@ -236,7 +236,9 @@ Published images support Linux amd64 and arm64:
 docker pull ghcr.io/zewelor/marketwatch:latest
 ```
 
-Every successful push to `main` publishes `latest` and `sha-<full-commit-SHA>`.
+After successful verification, every push to `main` selected by application CI
+publishes `latest` and `sha-<full-commit-SHA>`, including test-only and CI-only
+changes. Each image contains the complete verified revision.
 The workflow summary records the image digest; use `@sha256:…` to pin an exact
 image. After publication, cleanup preserves `latest`, the 10 newest other tagged
 images and 10 standalone untagged images, including the platform manifests of
@@ -316,24 +318,29 @@ Stop and remove the disposable server after testing with
 `docker compose -f compose.dev.yaml down`. Its data is kept in temporary
 memory and is lost when the container stops.
 
-The application CI workflow runs for changes to `cmd/`, `internal/`, Go
-dependencies, Docker inputs, its workflow or `droast.toml`. It runs all Go tests,
-builds binaries and images, and publishes to GHCR only after successful
-verification on `main`. The existing catalog workflow also runs for `scripts/`,
-development Compose and its own workflow changes; it tests `./scripts` without
-PostgreSQL and validates Compose. Only scheduled/manual catalog runs proceed to
-refresh and PR creation, after those same tool checks. Documentation-only changes
-run neither workflow. Catalog verification is isolated by event and ref; scheduled
-and manual refreshes share a queue and do not cancel an active refresh. Mixed
-application/tool changes can run both; shared code and dependency changes run
-application CI, which also tests the tools.
+The application CI workflow selects changes to `cmd/`, `internal/`, Go
+modules, Docker inputs, its workflow and `droast.toml`. It checks all Go tests,
+builds binaries and images, and smoke-tests the native image. The separate
+publication job requires successful verification through `needs` and a push to
+`main`. Every selected main run publishes its complete verified revision, even
+when that push only changes tests or CI configuration. This deliberately avoids
+losing unshipped code when a later push replaces an older verification run.
 
-Each workflow defines its paths once with a YAML anchor shared by its push and
-pull-request triggers. Update the application paths when changing Dockerfile COPY
-inputs. The catalog workflow opens update PRs. Commits outside the application
-paths create no image tag; the last published image remains available. Pull
-requests and other branches do not publish. Main application runs finish
-publication and cleanup before the next begins.
+Verification cancels superseded runs for the same ref. Publication uses its own
+concurrency group and lets an active push/cleanup finish. A newer pending
+publication may replace an older one; both contain complete verified revisions.
+A failed publication can be rerun, or a later qualifying main run can publish the
+current state. This does not make external registry operations transactional.
+
+The catalog workflow selects `scripts/`, development Compose and its own workflow;
+it verifies tools and Compose without PostgreSQL. Only its scheduled/manual runs
+refresh the catalog and create a PR. Documentation-only and `renovate.json` changes
+select neither workflow. Both workflows use `main` pushes and PR checks, avoiding
+an additional branch-push check; the path lists are shared with YAML anchors.
+Changes confined to Compose or the catalog workflow create no application image.
+Pull requests never publish. Keep native trigger paths aligned with build and test
+inputs. Catalog verification remains isolated by event/ref; scheduled/manual
+refreshes share a queue without cancelling an active refresh.
 See [testing and failure scenarios](docs/failure-scenarios.md) for coverage and
 additional container checks.
 
