@@ -202,6 +202,11 @@ sequence scenarios for this finite event contract; additional model/formal tooli
 would add maintenance beyond these bounded cases and is not introduced.
 Native path filters retain GitHub's diff limits and required-check behavior.
 
+Runtime branch guards use the repository's default branch and compare complete
+refs, so a tag with the same name cannot publish as a branch. Check both `main`
+and a differently named default branch. Native trigger branch filters remain
+static and must be updated separately when renaming the default branch.
+
 ## Disposable PostgreSQL for local tests
 
 The Compose fixture must expose PostgreSQL only on loopback, wait for readiness,
