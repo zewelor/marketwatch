@@ -101,16 +101,17 @@ activity unchanged. Checks sample current conditions and can miss crossings
 between checks.
 
 A failed notification stays pending for up to three hours and is retried on the
-next check. A newer episode replaces an older pending alert. Notifications show
-only the coin symbol, USD price and condition; percentage rules also show the
-signed change and window. Retried notifications may describe an earlier condition.
+next check. A newer episode replaces an older pending alert. Each new notification
+shows the coin symbol, USD price and threshold on one line. Percentage alerts
+also show the signed change and window. Retried notifications may describe an
+earlier condition.
 Rearming preserves pending notifications. Each check attempts each pending alert
 at most once, using its original text even if current market data is unavailable.
 Expiry at three hours fails the check without resetting the rule's activity.
 
 ```text
-BTC: 86000 USD
-Condition: price >= 86000 USD
+BTC 86 500 USD (próg ≥ 86 000)
+ETH 50 USD · −10% w 7d (próg ±10%)
 ```
 
 CoinLore does not provide a price-update timestamp in the ticker response.

@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -213,18 +215,39 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 }
 
 func render(rule Rule, q quote) *Pending {
-	message := fmt.Sprintf("%s: %g USD\nCondition: ", rule.Symbol, q.price)
+	message := fmt.Sprintf("%s %s USD", rule.Symbol, formatPrice(q.price))
 	switch rule.Condition {
 	case "above":
-		message += fmt.Sprintf("price >= %g USD", rule.Threshold)
+		message += " (próg ≥ " + formatPrice(rule.Threshold) + ")"
 	case "below":
-		message += fmt.Sprintf("price <= %g USD", rule.Threshold)
+		message += " (próg ≤ " + formatPrice(rule.Threshold) + ")"
 	default:
 		change := q.day
 		if rule.Window == "7d" {
 			change = q.week
 		}
-		message += fmt.Sprintf("absolute change >= %g%% (%s); change: %g%%", rule.Threshold, rule.Window, change)
+		sign := "+"
+		if change < 0 {
+			sign = "−"
+		}
+		message += fmt.Sprintf(" · %s%g%% w %s (próg ±%g%%)", sign, math.Abs(change), rule.Window, rule.Threshold)
 	}
 	return &Pending{ObservedAt: q.fetchedAt, Message: message}
+}
+
+func formatPrice(value float64) string {
+	amount := strconv.FormatFloat(value, 'f', -1, 64)
+	whole, fraction, hasFraction := strings.Cut(amount, ".")
+	var grouped strings.Builder
+	for i := range len(whole) {
+		if i > 0 && (len(whole)-i)%3 == 0 {
+			grouped.WriteByte(' ')
+		}
+		grouped.WriteByte(whole[i])
+	}
+	if hasFraction {
+		grouped.WriteByte('.')
+		grouped.WriteString(fraction)
+	}
+	return grouped.String()
 }
