@@ -1,10 +1,10 @@
 # Repository guide
 
-- Keep user-facing behavior in [README.md](README.md) and verification coverage in
-  [docs/failure-scenarios.md](docs/failure-scenarios.md), updating them when behavior
-  changes. Keep implementation small and explicit: use flat packages, follow
-  existing conventions, and apply YAGNI. CoinLore is the only market data source
-  and USD is fixed; do not add an automatic provider fallback.
+- Keep user-facing behavior and verification coverage in [README.md](README.md),
+  updating them when behavior changes. Keep implementation small and explicit:
+  use flat packages, follow existing conventions, and apply YAGNI. CoinLore is
+  the only market data source and USD is fixed; do not add an automatic provider
+  fallback.
 - Fail on invalid or unexpected state. Do not reset corrupt state, and do not treat
   logs as proof that a notification was delivered. Preserve other contributors'
   changes. Commit, push, publish, or deploy only when the task explicitly
@@ -22,14 +22,13 @@
   to full commit SHAs with version comments and container images to digests.
   Do not add dependency bots or release automation unless the
   task asks for them.
-- Before an isolated implementation, list likely failures in
-  [docs/failure-scenarios.md](docs/failure-scenarios.md). Do not add unit tests
-  after writing code. Prefer meaningful end-to-end scenarios that leave
+- Before an isolated implementation, list likely failures in the task plan.
+  Do not add unit tests after writing code. Prefer meaningful end-to-end scenarios that leave
   reproducible artifacts; run focused checks during development and the full
   verification at the end. Repeat full verification only after new changes,
   failures or unresolved concerns. Reassess property-based, stateful/model-based,
   and formal methods when contracts, state transitions, or concurrency change;
-  record the decision, benefit and cost in the failure-scenarios guide.
+  record the decision, benefit and cost in the task plan.
 - Canonical commands: `just verify` (format, vet, race-enabled E2E, amd64/arm64
   binaries), `just test`, `just e2e`, `droast --no-roast Dockerfile`,
   `just show_dockerignore`, and `just image`. E2E artifacts go

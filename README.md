@@ -342,8 +342,6 @@ Changes confined to Compose or the catalog workflow create no application image.
 Pull requests never publish. Keep native trigger paths aligned with build and test
 inputs. Catalog verification remains isolated by event/ref; scheduled/manual
 refreshes share a queue without cancelling an active refresh.
-See [testing and failure scenarios](docs/failure-scenarios.md) for coverage and
-additional container checks.
 
 ## References
 
