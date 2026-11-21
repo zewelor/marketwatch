@@ -21,21 +21,6 @@ jobs:
       cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    services:
-      postgres:
-        image: >-
-          postgres:18@sha256:eb63372c1e05c755f55fa30cbd07aecc443676fc6c0fa90b9002d01537841e1a
-        env:
-          POSTGRES_DB: marketwatch_test
-          POSTGRES_USER: marketwatch_test
-          POSTGRES_PASSWORD: marketwatch_test
-        ports:
-          - 15432:5432
-        options: >-
-          --health-cmd "pg_isready -U marketwatch_test -d marketwatch_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     permissions:
       contents: read
     steps:
@@ -50,6 +35,8 @@ jobs:
         run: go mod tidy -diff
       - name: Format
         run: test -z "$(gofmt -l cmd internal scripts)"
+      - name: Start PostgreSQL
+        run: docker compose --env-file /dev/null -f compose.dev.yaml up --wait --wait-timeout 60
       # Go checks share a cache and remain sequential; Dockerfile lint is independent.
       - parallel:
           - name: Verify Go and build binaries
