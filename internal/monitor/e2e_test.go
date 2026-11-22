@@ -157,7 +157,7 @@ const oneRule = `rules:
   - {coin: "90", threshold: 5, window: 24h}
 `
 
-func ruleKey(coin, condition string, threshold float64, window string) string {
+func ruleKey(coin string, condition Condition, threshold float64, window Window) string {
 	return (Rule{Coin: coin, Condition: condition, Threshold: threshold, Window: window}).fingerprint()
 }
 

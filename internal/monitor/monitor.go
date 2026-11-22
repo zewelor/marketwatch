@@ -5,10 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -130,15 +128,8 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 			dataErr = errors.New("missing CoinLore ID")
 		} else if q.priceErr != nil {
 			dataErr = q.priceErr
-		} else {
-			switch rule.Window {
-			case "24h":
-				value = q.day
-				dataErr = q.dayErr
-			case "7d":
-				value = q.week
-				dataErr = q.weekErr
-			}
+		} else if quoteForWindow, hasWindow := windowQuotes[rule.Window]; hasWindow {
+			value, dataErr = quoteForWindow(q)
 		}
 		if dataErr != nil {
 			r.Logger.Error("rule_skipped", "rule_id", rule.ID, "coin", rule.Coin, "reason", dataErr.Error())
@@ -159,7 +150,7 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 			if rs.Pending != nil {
 				r.Logger.Warn("pending_replaced", "rule_id", rule.ID, "lost_observed_at", rs.Pending.ObservedAt)
 			}
-			rs.Pending = render(rule, q)
+			rs.Pending = render(rule, q.price, value, q.fetchedAt)
 			created++
 		}
 		r.Logger.Info("rule_evaluated", "source", coinLore.Name, "rule_id", rule.ID, "coin", rule.Coin, "currency", "USD", "condition", rule.Condition, "threshold", rule.Threshold, "price", q.price, "window", rule.Window, "value", value, "fetched_at", q.fetchedAt, "decision", decision, "active", rs.Active, "pending", rs.Pending != nil, "dry_run", opts.DryRun)
@@ -214,40 +205,6 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 	return errors.Join(failures...)
 }
 
-func render(rule Rule, q quote) *Pending {
-	message := fmt.Sprintf("%s %s USD", rule.Symbol, formatPrice(q.price))
-	switch rule.Condition {
-	case "above":
-		message += " (threshold ≥ " + formatPrice(rule.Threshold) + ")"
-	case "below":
-		message += " (threshold ≤ " + formatPrice(rule.Threshold) + ")"
-	default:
-		change := q.day
-		if rule.Window == "7d" {
-			change = q.week
-		}
-		sign := "+"
-		if change < 0 {
-			sign = "−"
-		}
-		message += fmt.Sprintf(" · %s%g%% in %s (threshold ±%g%%)", sign, math.Abs(change), rule.Window, rule.Threshold)
-	}
-	return &Pending{ObservedAt: q.fetchedAt, Message: message}
-}
-
-func formatPrice(value float64) string {
-	amount := strconv.FormatFloat(value, 'f', -1, 64)
-	whole, fraction, hasFraction := strings.Cut(amount, ".")
-	var grouped strings.Builder
-	for i := range len(whole) {
-		if i > 0 && (len(whole)-i)%3 == 0 {
-			grouped.WriteByte(' ')
-		}
-		grouped.WriteByte(whole[i])
-	}
-	if hasFraction {
-		grouped.WriteByte('.')
-		grouped.WriteString(fraction)
-	}
-	return grouped.String()
+func render(rule Rule, price, value float64, fetchedAt time.Time) *Pending {
+	return &Pending{ObservedAt: fetchedAt, Message: rule.formatMessage(price, value)}
 }
