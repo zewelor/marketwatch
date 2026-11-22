@@ -218,9 +218,9 @@ func render(rule Rule, q quote) *Pending {
 	message := fmt.Sprintf("%s %s USD", rule.Symbol, formatPrice(q.price))
 	switch rule.Condition {
 	case "above":
-		message += " (próg ≥ " + formatPrice(rule.Threshold) + ")"
+		message += " (threshold ≥ " + formatPrice(rule.Threshold) + ")"
 	case "below":
-		message += " (próg ≤ " + formatPrice(rule.Threshold) + ")"
+		message += " (threshold ≤ " + formatPrice(rule.Threshold) + ")"
 	default:
 		change := q.day
 		if rule.Window == "7d" {
@@ -230,7 +230,7 @@ func render(rule Rule, q quote) *Pending {
 		if change < 0 {
 			sign = "−"
 		}
-		message += fmt.Sprintf(" · %s%g%% w %s (próg ±%g%%)", sign, math.Abs(change), rule.Window, rule.Threshold)
+		message += fmt.Sprintf(" · %s%g%% in %s (threshold ±%g%%)", sign, math.Abs(change), rule.Window, rule.Threshold)
 	}
 	return &Pending{ObservedAt: q.fetchedAt, Message: message}
 }

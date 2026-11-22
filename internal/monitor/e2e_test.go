@@ -176,10 +176,10 @@ func TestE2EEpisodes(t *testing.T) {
 		t.Fatalf("dedup/canonical IDs: %q", h.ids)
 	}
 	wantMessages := []string{
-		"BTC 100 USD (próg ≥ 100)",
-		"ETH 50 USD (próg ≤ 50)",
-		"BTC 100 USD · +5% w 24h (próg ±5%)",
-		"ETH 50 USD · −10% w 7d (próg ±10%)",
+		"BTC 100 USD (threshold ≥ 100)",
+		"ETH 50 USD (threshold ≤ 50)",
+		"BTC 100 USD · +5% in 24h (threshold ±5%)",
+		"ETH 50 USD · −10% in 7d (threshold ±10%)",
 	}
 	for i, m := range h.messages {
 		if m.Get("url") != "" || m.Get("url_title") != "" {
@@ -280,7 +280,7 @@ func TestE2EExpiryAndConfigChange(t *testing.T) {
 	h.config("rules:\n - {coin: \"90\", threshold: 4, window: 24h}\n - {coin: \"90\", threshold: 5, window: 24h}\n")
 	h.run(false)
 	h.sent(2)
-	if len(h.state().Rules) != 2 || h.messages[1].Get("message") != "BTC 100 USD · +5% w 24h (próg ±4%)" {
+	if len(h.state().Rules) != 2 || h.messages[1].Get("message") != "BTC 100 USD · +5% in 24h (threshold ±4%)" {
 		t.Fatal("config reconciliation")
 	}
 }
@@ -797,7 +797,7 @@ func TestE2EBidirectionalMovement(t *testing.T) {
 			t.Fatalf("step %d: wrong activity", i)
 		}
 	}
-	if got := h.messages[1].Get("message"); got != "BTC 100 USD · −3% w 24h (próg ±3%)" {
+	if got := h.messages[1].Get("message"); got != "BTC 100 USD · −3% in 24h (threshold ±3%)" {
 		t.Fatalf("negative change alert: %q", got)
 	}
 }
@@ -850,10 +850,10 @@ func TestE2EPriceAndPercentageEpisodes(t *testing.T) {
 			t.Fatalf("step %d: wrong activity", i)
 		}
 	}
-	if got := h.messages[0].Get("message"); got != "BTC 86 500.25 USD (próg ≥ 86 000)" {
+	if got := h.messages[0].Get("message"); got != "BTC 86 500.25 USD (threshold ≥ 86 000)" {
 		t.Fatalf("above alert: %q", got)
 	}
-	if got := h.messages[2].Get("message"); got != "BTC 80 000 USD (próg ≤ 80 000)" {
+	if got := h.messages[2].Get("message"); got != "BTC 80 000 USD (threshold ≤ 80 000)" {
 		t.Fatalf("below alert: %q", got)
 	}
 	// Changing the high definition preserves the unchanged percentage activity.
