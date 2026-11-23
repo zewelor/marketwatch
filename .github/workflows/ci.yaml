@@ -2,7 +2,7 @@ name: verify
 on:
   push:
     branches: [main]
-    paths: &application_paths
+    paths:
       - 'cmd/**'
       - 'internal/**'
       - 'go.mod'
@@ -12,7 +12,12 @@ on:
       - 'droast.toml'
       - '.github/workflows/ci.yaml'
   pull_request:
-    paths: *application_paths
+    paths-ignore:
+      - README.md
+      - AGENTS.md
+      - .github/renovate.json
+      - '.agents/skills/**'
+      - skills-lock.json
 permissions: {}
 jobs:
   verify:
