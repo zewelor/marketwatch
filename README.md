@@ -76,3 +76,6 @@ Pull requests run the race-enabled tests with PostgreSQL, lint the Dockerfile,
 smoke-test the native image, and build for Linux amd64 and arm64. Changes
 limited to this README, `AGENTS.md`, Renovate configuration, or skill metadata
 skip the workflow.
+
+Main runs queue from verification through
+publication in the order they start waiting.
