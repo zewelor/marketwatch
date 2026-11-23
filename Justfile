@@ -4,16 +4,36 @@ fmt:
     gofmt -w cmd internal scripts
 
 test:
-    go test ./... -count=1
-
-e2e:
+    #!/bin/sh
+    set -eu
+    # Keep the fixture locked until teardown, including across checkouts.
+    exec 9>>/tmp/marketwatch-test.lock
+    flock 9
+    set -a
+    . ./compose.dev.env
+    set +a
+    cleanup() {
+      status=$?
+      docker compose --env-file compose.dev.env -f compose.dev.yaml down || {
+        teardown_status=$?
+        echo "PostgreSQL fixture teardown failed (exit $teardown_status)" >&2
+        if [ "$status" -eq 0 ]; then
+          status=$teardown_status
+        fi
+      }
+      exit "$status"
+    }
+    trap cleanup EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    docker compose --env-file compose.dev.env -f compose.dev.yaml up --wait --wait-timeout 60
     mkdir -p artifacts/e2e
     MARKETWATCH_ARTIFACT_DIR="{{justfile_directory()}}/artifacts/e2e" go test -race ./... -count=1 -json > artifacts/e2e/results.jsonl
 
 verify:
     test -z "$(gofmt -l cmd internal scripts)"
     go vet ./...
-    just e2e
+    just test
     just build
 
 build:

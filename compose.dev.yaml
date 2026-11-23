@@ -4,15 +4,15 @@ services:
   postgres:
     image: postgres:18@sha256:eb63372c1e05c755f55fa30cbd07aecc443676fc6c0fa90b9002d01537841e1a
     environment:
-      POSTGRES_DB: marketwatch_test
-      POSTGRES_USER: marketwatch_test
-      POSTGRES_PASSWORD: ${MARKETWATCH_TEST_PASSWORD:-marketwatch_test}
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
     ports:
-      - "127.0.0.1:${MARKETWATCH_TEST_PORT:-15432}:5432"
+      - "${DB_HOST}:${DB_PORT}:5432"
     tmpfs:
       - /var/lib/postgresql
     healthcheck:
-      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-U", "marketwatch_test", "-d", "marketwatch_test"]
-      interval: 5s
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 1s
       timeout: 5s
-      retries: 10
+      retries: 30

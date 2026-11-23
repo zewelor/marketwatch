@@ -58,15 +58,17 @@ sends are retried on later checks and expire after three hours.
 
 ## Verify locally
 
+Requires Docker Compose, `flock`, and `mise`. [mise.toml](mise.toml) pins Go
+and selects the latest releases of `just` and `droast`:
+
 ```sh
-docker compose -f compose.dev.yaml up --wait
-MARKETWATCH_TEST_POSTGRES=1 DB_HOST=127.0.0.1 DB_PORT=15432 \
-  DB_NAME=marketwatch_test DB_USER=marketwatch_test DB_PASSWORD=marketwatch_test \
-  DB_SSLMODE=disable just verify
-docker compose -f compose.dev.yaml down
+mise install
+mise exec -- just verify
 ```
 
-Test logs and state snapshots are in `artifacts/e2e/`.
+`just test` runs the Go suite with the race detector and a disposable PostgreSQL
+fixture. Invocations by the same user on the same host wait for the fixture lock,
+including across checkouts. Test logs and state snapshots are in `artifacts/e2e/`.
 
 ## Continuous integration
 

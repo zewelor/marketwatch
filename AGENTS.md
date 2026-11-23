@@ -30,7 +30,7 @@
   and formal methods when contracts, state transitions, or concurrency change;
   record the decision, benefit and cost in the task plan.
 - Canonical commands: `just verify` (format, vet, race-enabled E2E, amd64/arm64
-  binaries), `just test`, `just e2e`, `droast --no-roast Dockerfile`,
+  binaries), `just test`, `droast --no-roast Dockerfile`,
   `just show_dockerignore`, and `just image`. E2E artifacts go
   under `artifacts/e2e/`. Keep the root `.dockerignore`; after changing Docker
   inputs, run `just show_dockerignore` and inspect the filtered files and size.

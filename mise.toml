@@ -1,0 +1,4 @@
+[tools]
+go = "1.27.4"
+"aqua:casey/just" = "latest"
+"github:immanuwell/dockerfile-roast" = "latest"
