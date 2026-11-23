@@ -4,14 +4,7 @@
   "platformAutomerge": false,
   "extends": [
     "config:recommended",
-    "github>zewelor/renovate-config//presets/go"
-  ],
-  "packageRules": [
-    {
-      "description": "Keep the PostgreSQL test image on major version 18",
-      "matchDatasources": ["docker"],
-      "matchDepNames": ["postgres"],
-      "allowedVersions": "/^18$/"
-    }
+    "github>zewelor/renovate-config//presets/go",
+    "github>zewelor/renovate-config//presets/postgresql-18"
   ]
 }
