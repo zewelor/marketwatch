@@ -50,6 +50,9 @@ rules:
 `7d`. `above` and `below` are inclusive USD limits. Use a quoted CoinLore ID
 when a symbol is ambiguous.
 
+Alerts group thousands with commas in prices and price thresholds, as in
+`BTC 86,500.25 USD (threshold ≥ 86,000)`.
+
 After firing, a rule stays quiet until it rearms. Percentage rules rearm when
 the absolute change falls below the threshold minus 0.5 percentage points,
 or at zero for thresholds of 0.5% or less. Price rules rearm once the price

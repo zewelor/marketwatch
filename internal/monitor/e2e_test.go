@@ -850,10 +850,10 @@ func TestE2EPriceAndPercentageEpisodes(t *testing.T) {
 			t.Fatalf("step %d: wrong activity", i)
 		}
 	}
-	if got := h.messages[0].Get("message"); got != "BTC 86 500.25 USD (threshold ≥ 86 000)" {
+	if got := h.messages[0].Get("message"); got != "BTC 86,500.25 USD (threshold ≥ 86,000)" {
 		t.Fatalf("above alert: %q", got)
 	}
-	if got := h.messages[2].Get("message"); got != "BTC 80 000 USD (threshold ≤ 80 000)" {
+	if got := h.messages[2].Get("message"); got != "BTC 80,000 USD (threshold ≤ 80,000)" {
 		t.Fatalf("below alert: %q", got)
 	}
 	// Changing the high definition preserves the unchanged percentage activity.
