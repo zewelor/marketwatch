@@ -82,3 +82,9 @@ skip the workflow.
 
 Main runs queue from verification through
 publication in the order they start waiting.
+
+A separate workflow cleans up old GHCR images on the first of each month at 03:27 UTC
+under the same package lock. It protects `latest` and images from the last
+60 days, and keeps the 10 newest tagged versions among older candidates.
+Older untagged versions are eligible for deletion. To preview the cleanup,
+run **Monthly GHCR cleanup** from `main` with the default `dry_run` setting.

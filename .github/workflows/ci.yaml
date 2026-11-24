@@ -138,12 +138,3 @@ jobs:
         env:
           DIGEST: ${{ steps.image.outputs.digest }}
         run: printf 'Published `%s@%s`\n' "$IMAGE" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"
-      - name: Delete old images
-        uses: dataaxiom/ghcr-cleanup-action@ac45a8c04b1eb4b27974ca79a0a74f344c93664b # v1.3.0
-        with:
-          package: ${{ github.event.repository.name }}
-          keep-n-tagged: 10
-          keep-n-untagged: 10
-          exclude-tags: latest
-          delete-partial-images: true
-          validate: true
