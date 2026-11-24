@@ -100,7 +100,7 @@ func formatPrice(value float64) string {
 	var grouped strings.Builder
 	for i := range len(whole) {
 		if i > 0 && (len(whole)-i)%3 == 0 {
-			grouped.WriteByte(' ')
+			grouped.WriteByte(',')
 		}
 		grouped.WriteByte(whole[i])
 	}
