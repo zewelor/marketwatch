@@ -281,6 +281,23 @@ func TestE2EGroupedAlertsRetryWithoutCombiningObservations(t *testing.T) {
   - {coin: btc, threshold: 3, window: 24h}
   - {coin: btc, threshold: 4, window: 24h}
 `)
+	groupLogCount := func(event, groupID string) int {
+		t.Helper()
+		count := 0
+		for _, line := range strings.Split(strings.TrimSpace(h.logs.String()), "\n") {
+			var record struct {
+				Event   string `json:"msg"`
+				GroupID string `json:"group_id"`
+			}
+			if err := json.Unmarshal([]byte(line), &record); err != nil {
+				t.Fatal(err)
+			}
+			if record.Event == event && record.GroupID == groupID {
+				count++
+			}
+		}
+		return count
+	}
 	h.prices("86500.25", "-4", "8", "50", "0", "0")
 	h.pushStatus = 503
 	h.run(true)
@@ -289,10 +306,15 @@ func TestE2EGroupedAlertsRetryWithoutCombiningObservations(t *testing.T) {
 	if first.Get("title") != "BTC | 86,500.25 USD" || first.Get("message") != "24h −4% | 7d +8%" {
 		t.Fatalf("first read did not group the two windows: %v", first)
 	}
-	for _, rule := range h.state().Rules {
+	state := h.state()
+	for _, rule := range state.Rules {
 		if !rule.Active || rule.Pending == nil {
 			t.Fatal("failed grouped delivery lost a rule or its pending alert")
 		}
+	}
+	groupID := state.Rules[ruleKey("90", "above", 86000, "")].Pending.GroupID
+	if groupID == "" || groupLogCount("rule_evaluated", groupID) != 4 || groupLogCount("send_failed", groupID) != 1 {
+		t.Fatal("send failure must be traceable to all four evaluations")
 	}
 	h.now = h.now.Add(time.Minute)
 	h.prices("87000", "0", "8", "50", "0", "0")
@@ -308,6 +330,9 @@ func TestE2EGroupedAlertsRetryWithoutCombiningObservations(t *testing.T) {
 	h.sent(4)
 	if h.messages[2].Encode() != first.Encode() {
 		t.Fatal("later observation modified the pending notification")
+	}
+	if groupLogCount("pushover_accepted", groupID) != 1 {
+		t.Fatal("accepted retry must identify the original group")
 	}
 	newAlert := h.messages[3]
 	if newAlert.Get("title") != "BTC | 87,500 USD" || newAlert.Get("message") != "24h +4%" ||
@@ -740,7 +765,7 @@ func TestE2ECaseVariantState(t *testing.T) {
 }
 
 func TestE2EInvalidMinimalState(t *testing.T) {
-	for _, variant := range []string{"legacy", "missing_active", "null_active", "unknown_rule", "unknown_pending", "missing_time", "empty_message", "title_without_group", "group_without_title"} {
+	for _, variant := range []string{"legacy", "missing_active", "null_active", "unknown_rule", "unknown_pending", "missing_time", "empty_message", "title_without_group", "group_without_title", "null_group", "empty_group"} {
 		t.Run(variant, func(t *testing.T) {
 			h := newHarness(t, oneRule)
 			h.pushStatus = 503
@@ -776,6 +801,10 @@ func TestE2EInvalidMinimalState(t *testing.T) {
 				delete(pending, "group_id")
 			case "group_without_title":
 				delete(pending, "title")
+			case "null_group":
+				pending["title"], pending["group_id"] = nil, nil
+			case "empty_group":
+				pending["title"], pending["group_id"] = "", ""
 			}
 			data, err := json.MarshalIndent(state, "", "  ")
 			if err != nil {

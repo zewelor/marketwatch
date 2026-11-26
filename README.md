@@ -32,9 +32,9 @@ Pass secrets through your environment. Optionally pass
 
 Schedule `marketwatch check` without overlapping runs. Collect its JSON logs
 and treat a nonzero exit as a failed check. See `rule_evaluated` for the condition
-and threshold. To trace a retry, match its `rule_ids` and `observed_at` to the
-corresponding `rule_id` and `fetched_at` in that log. Back up `public.marketwatch_state`
-to preserve alert state across recovery.
+and threshold. For grouped alerts, use `group_id` to match a send log to its
+triggering evaluations. Back up `public.marketwatch_state` to preserve alert
+state across recovery.
 
 With Go 1.27.4, run from source with
 `go run ./cmd/marketwatch check --config config.yaml --dry-run`.

@@ -110,7 +110,7 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 		if r.Now().Sub(delivery.ObservedAt) >= pendingLifetime {
 			delivery.clear(state)
 			expired++
-			r.Logger.Warn("pending_expired", "rule_id", delivery.ruleIDs[0], "rule_ids", delivery.ruleIDs, "observed_at", delivery.ObservedAt)
+			r.Logger.Warn("pending_expired", "rule_id", delivery.ruleIDs[0], "rule_ids", delivery.ruleIDs, "group_id", delivery.GroupID, "observed_at", delivery.ObservedAt)
 			failures = append(failures, fmt.Errorf("rules %v: pending expired without delivery", delivery.ruleIDs))
 		}
 	}
@@ -146,6 +146,7 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 		evaluated++
 		rs := state.Rules[rule.ID]
 		decision := "unchanged"
+		var groupID string
 		if rs.Active {
 			if rule.rearmed(value) {
 				rs.Active = false
@@ -154,9 +155,6 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 		} else if rule.triggered(value) {
 			rs.Active = true
 			decision = "alert"
-			if rs.Pending != nil {
-				r.Logger.Warn("pending_replaced", "rule_id", rule.ID, "lost_observed_at", rs.Pending.ObservedAt)
-			}
 			alert, found := alerts[rule.Coin]
 			if !found {
 				alert = observationAlert{
@@ -173,9 +171,13 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 			if rule.Window != WindowNone {
 				alert.changes[rule.Window] = value
 			}
+			groupID = alert.pending.GroupID
+			if rs.Pending != nil {
+				r.Logger.Warn("pending_replaced", "rule_id", rule.ID, "lost_observed_at", rs.Pending.ObservedAt, "group_id", rs.Pending.GroupID, "new_group_id", groupID)
+			}
 			rs.Pending = alert.pending
 		}
-		r.Logger.Info("rule_evaluated", "source", coinLore.Name, "rule_id", rule.ID, "coin", rule.Coin, "currency", "USD", "condition", rule.Condition, "threshold", rule.Threshold, "price", q.price, "window", rule.Window, "value", value, "fetched_at", q.fetchedAt, "decision", decision, "active", rs.Active, "pending", rs.Pending != nil, "dry_run", opts.DryRun)
+		r.Logger.Info("rule_evaluated", "group_id", groupID, "source", coinLore.Name, "rule_id", rule.ID, "coin", rule.Coin, "currency", "USD", "condition", rule.Condition, "threshold", rule.Threshold, "price", q.price, "window", rule.Window, "value", value, "fetched_at", q.fetchedAt, "decision", decision, "active", rs.Active, "pending", rs.Pending != nil, "dry_run", opts.DryRun)
 	}
 	for _, alert := range alerts {
 		alert.pending.Message = formatChanges(alert.changes)
@@ -183,7 +185,7 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 	deliveries := state.pendingDeliveries(rules)
 	if opts.DryRun {
 		for _, delivery := range deliveries {
-			r.Logger.Info("would_send", "rule_id", delivery.ruleIDs[0], "rule_ids", delivery.ruleIDs, "observed_at", delivery.ObservedAt, "title", delivery.title(), "message", delivery.Message)
+			r.Logger.Info("would_send", "rule_id", delivery.ruleIDs[0], "rule_ids", delivery.ruleIDs, "group_id", delivery.GroupID, "observed_at", delivery.ObservedAt, "title", delivery.title(), "message", delivery.Message)
 		}
 		return errors.Join(failures...)
 	}
@@ -199,7 +201,7 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 			delivery.clear(state)
 			expired++
 			failures = append(failures, fmt.Errorf("rules %v: pending expired before send", delivery.ruleIDs))
-			r.Logger.Warn("pending_expired", "rule_id", delivery.ruleIDs[0], "rule_ids", delivery.ruleIDs, "observed_at", delivery.ObservedAt)
+			r.Logger.Warn("pending_expired", "rule_id", delivery.ruleIDs[0], "rule_ids", delivery.ruleIDs, "group_id", delivery.GroupID, "observed_at", delivery.ObservedAt)
 			if err := store.save(ctx, state); err != nil {
 				return errors.Join(append(failures, err)...)
 			}
@@ -207,7 +209,7 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 		}
 		stop, err := r.send(ctx, delivery.Pending, opts)
 		if err != nil {
-			r.Logger.Error("send_failed", "rule_id", delivery.ruleIDs[0], "rule_ids", delivery.ruleIDs, "observed_at", delivery.ObservedAt, "reason", err.Error(), "remaining_sends_stopped", stop)
+			r.Logger.Error("send_failed", "rule_id", delivery.ruleIDs[0], "rule_ids", delivery.ruleIDs, "group_id", delivery.GroupID, "observed_at", delivery.ObservedAt, "reason", err.Error(), "remaining_sends_stopped", stop)
 			failures = append(failures, fmt.Errorf("rules %v: %w", delivery.ruleIDs, err))
 			if stop {
 				break
@@ -217,7 +219,7 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 		now := r.Now().UTC()
 		delivery.clear(state)
 		sent++
-		r.Logger.Info("pushover_accepted", "rule_id", delivery.ruleIDs[0], "rule_ids", delivery.ruleIDs, "observed_at", delivery.ObservedAt, "accepted_at", now)
+		r.Logger.Info("pushover_accepted", "rule_id", delivery.ruleIDs[0], "rule_ids", delivery.ruleIDs, "group_id", delivery.GroupID, "observed_at", delivery.ObservedAt, "accepted_at", now)
 		if err := store.save(ctx, state); err != nil {
 			return errors.Join(append(failures, err)...)
 		}

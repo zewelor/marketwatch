@@ -115,10 +115,13 @@ func decodeState(data []byte) (State, error) {
 			if err := exactFields(pending, "observed_at", "message", "title", "group_id"); err != nil {
 				return State{}, fmt.Errorf("rule %q: %w", id, err)
 			}
-			if p.ObservedAt.IsZero() || p.Message == "" || (p.Title == "") != (p.GroupID == "") {
+			_, hasTitle := pending["title"]
+			_, hasGroupID := pending["group_id"]
+			grouped := hasTitle || hasGroupID
+			if p.ObservedAt.IsZero() || p.Message == "" || (grouped && (p.Title == "" || p.GroupID == "")) {
 				return State{}, fmt.Errorf("rule %q: invalid pending", id)
 			}
-			if p.GroupID != "" {
+			if grouped {
 				// Restore sharing among rule slots after decoding persisted copies.
 				if group := groups[p.GroupID]; group != nil {
 					if !group.ObservedAt.Equal(p.ObservedAt) || group.Title != p.Title || group.Message != p.Message {
