@@ -240,7 +240,7 @@ func TestE2EPendingSequences(t *testing.T) {
 	h.run(true)
 	h.sent(3)
 	p := h.state().Rules[key].Pending
-	if p.Message != "BTC 101 USD · −5% in 24h (threshold ±5%)" || !p.ObservedAt.Equal(h.now) || !strings.Contains(h.logs.String(), "pending_replaced") {
+	if p.Message != "BTC 101 USD · −5% in 24h" || !p.ObservedAt.Equal(h.now) || !strings.Contains(h.logs.String(), "pending_replaced") {
 		t.Fatal("new episode did not replace pending")
 	}
 	h.pushStatus = 200
@@ -248,7 +248,7 @@ func TestE2EPendingSequences(t *testing.T) {
 	h.now = h.now.Add(time.Hour)
 	h.run(true)
 	h.sent(4)
-	if h.messages[3].Get("message") != "BTC 101 USD · −5% in 24h" || h.messages[3].Get("title") != "Marketwatch" || h.state().Rules[key].Pending != nil {
+	if h.messages[3].Get("message") != p.Message || h.messages[3].Get("title") != "Marketwatch" || h.state().Rules[key].Pending != nil {
 		t.Fatal("retry must send the concise saved alert and record success despite market failure")
 	}
 	h.marketStatus = 200
@@ -279,8 +279,15 @@ func TestE2EExpiryAndConfigChange(t *testing.T) {
 	h.config("rules:\n - {coin: \"90\", threshold: 4, window: 24h}\n - {coin: \"90\", threshold: 5, window: 24h}\n")
 	h.run(false)
 	h.sent(2)
-	if len(h.state().Rules) != 2 || h.messages[1].Get("message") != "BTC 100 USD · +5% in 24h" {
-		t.Fatal("config reconciliation")
+	rules := h.state().Rules
+	if len(rules) != 2 {
+		t.Fatal("config reconciliation must keep exactly two rules")
+	}
+	for _, threshold := range []float64{4, 5} {
+		rule := rules[ruleKey("90", "absolute-change", threshold, "24h")]
+		if rule == nil || !rule.Active {
+			t.Fatalf("expected active rule for threshold %g", threshold)
+		}
 	}
 }
 

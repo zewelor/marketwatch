@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -206,5 +208,30 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 }
 
 func render(rule Rule, price, value float64, fetchedAt time.Time) *Pending {
-	return &Pending{ObservedAt: fetchedAt, Message: rule.formatMessage(price, value)}
+	message := fmt.Sprintf("%s %s USD", rule.Symbol, formatPrice(price))
+	if rule.Condition == ConditionAbsoluteChange {
+		sign := "+"
+		if value < 0 {
+			sign = "−"
+		}
+		message += fmt.Sprintf(" · %s%g%% in %s", sign, math.Abs(value), rule.Window)
+	}
+	return &Pending{ObservedAt: fetchedAt, Message: message}
+}
+
+func formatPrice(value float64) string {
+	amount := strconv.FormatFloat(value, 'f', -1, 64)
+	whole, fraction, hasFraction := strings.Cut(amount, ".")
+	var grouped strings.Builder
+	for i := range len(whole) {
+		if i > 0 && (len(whole)-i)%3 == 0 {
+			grouped.WriteByte(',')
+		}
+		grouped.WriteByte(whole[i])
+	}
+	if hasFraction {
+		grouped.WriteByte('.')
+		grouped.WriteString(fraction)
+	}
+	return grouped.String()
 }

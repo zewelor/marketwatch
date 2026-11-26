@@ -31,8 +31,9 @@ Pass secrets through your environment. Optionally pass
 `--env HEALTHCHECKS_PING_URL` to monitor scheduled runs.
 
 Schedule `marketwatch check` without overlapping runs. Collect its JSON logs
-and treat a nonzero exit as a failed check. Back up `public.marketwatch_state`
-to preserve alert state across recovery.
+and treat a nonzero exit as a failed check. See `rule_evaluated` for the condition
+and threshold. Back up `public.marketwatch_state` to preserve alert state across
+recovery.
 
 With Go 1.27.4, run from source with
 `go run ./cmd/marketwatch check --config config.yaml --dry-run`.
@@ -49,11 +50,6 @@ rules:
 `threshold` alerts on a rise or fall of at least that percentage over `24h` or
 `7d`. `above` and `below` are inclusive USD limits. Use a quoted CoinLore ID
 when a symbol is ambiguous.
-
-Pushover alerts show the price with thousands separators, as in
-`BTC 86,500.25 USD`. Percentage alerts also show the change and its window, as in
-`BTC 86,500.25 USD · −3% in 24h`. The `rule_evaluated` log records the condition
-and threshold.
 
 After firing, a rule stays quiet until it rearms. Percentage rules rearm when
 the absolute change falls below the threshold minus 0.5 percentage points,
