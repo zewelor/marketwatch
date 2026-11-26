@@ -25,7 +25,7 @@ func TestE2EAutomaticRuleFingerprints(t *testing.T) {
 `)
 	h.prices("86000", "3", "0", "50", "0", "0")
 	h.run(false)
-	h.sent(2)
+	h.sent(1)
 	original := h.state()
 	for _, id := range []string{btcAbove86000, btcAbove90000, btcBelow80000, btcMovement3} {
 		if r := original.Rules[id]; r == nil || r.Fingerprint != id {
@@ -35,8 +35,8 @@ func TestE2EAutomaticRuleFingerprints(t *testing.T) {
 	if len(original.Rules) != 4 || h.ids != "90" {
 		t.Fatal("multiple conditions were not independent or coin fetch was not deduplicated")
 	}
-	if strings.Contains(h.messages[0].Get("message"), btcAbove86000) {
-		t.Fatal("internal fingerprint leaked into the notification text")
+	if got := h.messages[0]; got.Get("title") != "BTC | 86,000 USD" || got.Get("message") != "24h +3%" {
+		t.Fatalf("unexpected combined notification: %v", got)
 	}
 
 	// Restart and reorder, changing only YAML spelling and coin aliases.
@@ -51,14 +51,17 @@ func TestE2EAutomaticRuleFingerprints(t *testing.T) {
   - {coin: BtC, above: 86000.0}
 `)
 	h.run(false)
-	h.sent(2)
+	h.sent(1)
 	if !reflect.DeepEqual(original, h.state()) {
 		t.Fatal("restart, order or equivalent YAML spelling changed rule state")
 	}
 
 	h.prices("90000", "0", "0", "50", "0", "0")
 	h.run(false)
-	h.sent(3)
+	h.sent(2)
+	if got := h.messages[1]; got.Get("title") != "BTC | 90,000 USD" || got.Get("message") != "Price alert" {
+		t.Fatalf("unexpected price-only notification: %v", got)
+	}
 	beforeChange := h.state()
 	if !beforeChange.Rules[btcAbove90000].Active || beforeChange.Rules[btcMovement3].Active {
 		t.Fatal("higher price threshold or percentage rearm was not independent")
@@ -70,7 +73,7 @@ func TestE2EAutomaticRuleFingerprints(t *testing.T) {
   - {coin: btc, threshold: 3, window: 24h}
 `)
 	h.run(false)
-	h.sent(4)
+	h.sent(3)
 	afterChange := h.state()
 	if len(afterChange.Rules) != 4 || afterChange.Rules[btcAbove86000] != nil || !strings.Contains(h.logs.String(), "rule_removed") {
 		t.Fatal("changed definition did not replace only its old key")

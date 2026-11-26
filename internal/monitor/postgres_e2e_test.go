@@ -393,13 +393,16 @@ func TestE2ECommitResponseLostAfterAcceptedSend(t *testing.T) {
 		t.Fatalf("expected a server-confirmed COMMIT with a lost response; err=%v still_armed=%v", err, proxy.loseCommit.Load())
 	}
 	state := h.state()
-	firstKey := ruleKey("90", "above", 100, "")
-	if state.Rules[firstKey].Pending != nil {
-		t.Fatal("committed accepted notification remained pending")
+	for _, key := range []string{
+		ruleKey("90", "above", 100, ""),
+		ruleKey("90", "absolute-change", 5, "24h"),
+	} {
+		if state.Rules[key].Pending != nil {
+			t.Fatalf("accepted group still has pending rule %s", key)
+		}
 	}
 	for _, key := range []string{
 		ruleKey("80", "below", 50, ""),
-		ruleKey("90", "absolute-change", 5, "24h"),
 		ruleKey("80", "absolute-change", 10, "7d"),
 	} {
 		if state.Rules[key].Pending == nil {
@@ -409,7 +412,7 @@ func TestE2ECommitResponseLostAfterAcceptedSend(t *testing.T) {
 
 	h.beforePush = nil
 	h.run(false)
-	h.sent(4) // The acknowledged first notification was committed and is not duplicated.
+	h.sent(2) // The acknowledged first notification was committed and is not duplicated.
 	for key, rule := range h.state().Rules {
 		if rule.Pending != nil {
 			t.Fatalf("retry left pending notification %s", key)

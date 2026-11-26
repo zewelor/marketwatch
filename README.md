@@ -32,8 +32,8 @@ Pass secrets through your environment. Optionally pass
 
 Schedule `marketwatch check` without overlapping runs. Collect its JSON logs
 and treat a nonzero exit as a failed check. See `rule_evaluated` for the condition
-and threshold. To trace a retry, match its `rule_id` and `observed_at` to the
-rule's `rule_id` and `fetched_at` in that log. Back up `public.marketwatch_state`
+and threshold. To trace a retry, match its `rule_ids` and `observed_at` to the
+corresponding `rule_id` and `fetched_at` in that log. Back up `public.marketwatch_state`
 to preserve alert state across recovery.
 
 With Go 1.27.4, run from source with
@@ -50,7 +50,8 @@ rules:
 
 `threshold` alerts on a rise or fall of at least that percentage over `24h` or
 `7d`. `above` and `below` are inclusive USD limits. Use a quoted CoinLore ID
-when a symbol is ambiguous.
+when a symbol is ambiguous. Rules triggered by the same coin quote share one
+Pushover notification, dated at the original observation time.
 
 After firing, a rule stays quiet until it rearms. Percentage rules rearm when
 the absolute change falls below the threshold minus 0.5 percentage points,
