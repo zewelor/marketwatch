@@ -107,7 +107,12 @@ func (r *Runner) fetch(ctx context.Context, rules []Rule) (map[string]quote, err
 }
 
 func (r *Runner) send(ctx context.Context, p *Pending, opts Options) (stop bool, err error) {
-	form := url.Values{"token": {opts.Token}, "user": {opts.User}, "priority": {"0"}, "title": {"Marketwatch"}, "message": {p.Message}}
+	// Pending alerts retain the full text, including alerts queued by older versions.
+	message := p.Message
+	if i := strings.LastIndex(message, " ("+thresholdLabel+" "); i >= 0 && strings.HasSuffix(message, ")") {
+		message = message[:i]
+	}
+	form := url.Values{"token": {opts.Token}, "user": {opts.User}, "priority": {"0"}, "title": {"Marketwatch"}, "message": {message}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.pushURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return false, errors.New("create Pushover request failed")

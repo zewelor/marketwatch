@@ -176,10 +176,10 @@ func TestE2EEpisodes(t *testing.T) {
 		t.Fatalf("dedup/canonical IDs: %q", h.ids)
 	}
 	wantMessages := []string{
-		"BTC 100 USD (threshold ≥ 100)",
-		"ETH 50 USD (threshold ≤ 50)",
-		"BTC 100 USD · +5% in 24h (threshold ±5%)",
-		"ETH 50 USD · −10% in 7d (threshold ±10%)",
+		"BTC 100 USD",
+		"ETH 50 USD",
+		"BTC 100 USD · +5% in 24h",
+		"ETH 50 USD · −10% in 7d",
 	}
 	for i, m := range h.messages {
 		if m.Get("url") != "" || m.Get("url_title") != "" {
@@ -228,7 +228,6 @@ func TestE2EPendingSequences(t *testing.T) {
 	h.run(true)
 	h.sent(1)
 	key := ruleKey("90", "absolute-change", 5, "24h")
-	original := h.state().Rules[key].Pending.Message
 	h.now = h.now.Add(time.Hour)
 	h.prices("99", "0", "0", "50", "0", "0")
 	h.run(true)
@@ -241,7 +240,7 @@ func TestE2EPendingSequences(t *testing.T) {
 	h.run(true)
 	h.sent(3)
 	p := h.state().Rules[key].Pending
-	if p.Message == original || !p.ObservedAt.Equal(h.now) || !strings.Contains(h.logs.String(), "pending_replaced") {
+	if p.Message != "BTC 101 USD · −5% in 24h (threshold ±5%)" || !p.ObservedAt.Equal(h.now) || !strings.Contains(h.logs.String(), "pending_replaced") {
 		t.Fatal("new episode did not replace pending")
 	}
 	h.pushStatus = 200
@@ -249,8 +248,8 @@ func TestE2EPendingSequences(t *testing.T) {
 	h.now = h.now.Add(time.Hour)
 	h.run(true)
 	h.sent(4)
-	if h.messages[3].Get("message") != p.Message || h.messages[3].Get("title") != "Marketwatch" || h.state().Rules[key].Pending != nil {
-		t.Fatal("retry must use persisted message and save success despite market failure")
+	if h.messages[3].Get("message") != "BTC 101 USD · −5% in 24h" || h.messages[3].Get("title") != "Marketwatch" || h.state().Rules[key].Pending != nil {
+		t.Fatal("retry must send the concise saved alert and record success despite market failure")
 	}
 	h.marketStatus = 200
 	h.run(false)
@@ -280,7 +279,7 @@ func TestE2EExpiryAndConfigChange(t *testing.T) {
 	h.config("rules:\n - {coin: \"90\", threshold: 4, window: 24h}\n - {coin: \"90\", threshold: 5, window: 24h}\n")
 	h.run(false)
 	h.sent(2)
-	if len(h.state().Rules) != 2 || h.messages[1].Get("message") != "BTC 100 USD · +5% in 24h (threshold ±4%)" {
+	if len(h.state().Rules) != 2 || h.messages[1].Get("message") != "BTC 100 USD · +5% in 24h" {
 		t.Fatal("config reconciliation")
 	}
 }
@@ -797,7 +796,7 @@ func TestE2EBidirectionalMovement(t *testing.T) {
 			t.Fatalf("step %d: wrong activity", i)
 		}
 	}
-	if got := h.messages[1].Get("message"); got != "BTC 100 USD · −3% in 24h (threshold ±3%)" {
+	if got := h.messages[1].Get("message"); got != "BTC 100 USD · −3% in 24h" {
 		t.Fatalf("negative change alert: %q", got)
 	}
 }
@@ -850,10 +849,10 @@ func TestE2EPriceAndPercentageEpisodes(t *testing.T) {
 			t.Fatalf("step %d: wrong activity", i)
 		}
 	}
-	if got := h.messages[0].Get("message"); got != "BTC 86,500.25 USD (threshold ≥ 86,000)" {
+	if got := h.messages[0].Get("message"); got != "BTC 86,500.25 USD" {
 		t.Fatalf("above alert: %q", got)
 	}
-	if got := h.messages[2].Get("message"); got != "BTC 80,000 USD (threshold ≤ 80,000)" {
+	if got := h.messages[2].Get("message"); got != "BTC 80,000 USD" {
 		t.Fatalf("below alert: %q", got)
 	}
 	// Changing the high definition preserves the unchanged percentage activity.
