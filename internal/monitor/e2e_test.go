@@ -228,10 +228,29 @@ func TestE2EPendingSequences(t *testing.T) {
 	h.run(true)
 	h.sent(1)
 	key := ruleKey("90", "absolute-change", 5, "24h")
+	requireObservationLog := func(event string, observedAt time.Time) {
+		t.Helper()
+		for _, line := range strings.Split(strings.TrimSpace(h.logs.String()), "\n") {
+			var record struct {
+				Event      string    `json:"msg"`
+				RuleID     string    `json:"rule_id"`
+				ObservedAt time.Time `json:"observed_at"`
+			}
+			if err := json.Unmarshal([]byte(line), &record); err != nil {
+				t.Fatal(err)
+			}
+			if record.Event == event && record.RuleID == key && record.ObservedAt.Equal(observedAt) {
+				return
+			}
+		}
+		t.Fatalf("missing %s with rule_id=%s and observed_at=%s", event, key, observedAt)
+	}
+	firstObservedAt := h.now
 	h.now = h.now.Add(time.Hour)
 	h.prices("99", "0", "0", "50", "0", "0")
 	h.run(true)
 	h.sent(2)
+	requireObservationLog("send_failed", firstObservedAt)
 	if h.state().Rules[key].Active || h.state().Rules[key].Pending == nil {
 		t.Fatal("rearm removed pending")
 	}
@@ -248,6 +267,7 @@ func TestE2EPendingSequences(t *testing.T) {
 	h.now = h.now.Add(time.Hour)
 	h.run(true)
 	h.sent(4)
+	requireObservationLog("pushover_accepted", p.ObservedAt)
 	if h.messages[3].Get("message") != p.Message || h.messages[3].Get("title") != "Marketwatch" || h.state().Rules[key].Pending != nil {
 		t.Fatal("retry must send the concise saved alert and record success despite market failure")
 	}

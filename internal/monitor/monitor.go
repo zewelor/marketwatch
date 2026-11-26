@@ -170,14 +170,15 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 	}
 	for _, rule := range rules {
 		rs := state.Rules[rule.ID]
-		if rs.Pending == nil {
+		pending := rs.Pending
+		if pending == nil {
 			continue
 		}
 		if err := ctx.Err(); err != nil {
 			return errors.Join(append(failures, err)...)
 		}
 		// Network time can move an event across the expiry boundary.
-		if r.Now().Sub(rs.Pending.ObservedAt) >= pendingLifetime {
+		if r.Now().Sub(pending.ObservedAt) >= pendingLifetime {
 			rs.Pending = nil
 			expired++
 			failures = append(failures, fmt.Errorf("rule %q: pending expired before send", rule.ID))
@@ -187,9 +188,9 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 			}
 			continue
 		}
-		stop, err := r.send(ctx, rs.Pending, opts)
+		stop, err := r.send(ctx, pending, opts)
 		if err != nil {
-			r.Logger.Error("send_failed", "rule_id", rule.ID, "reason", err.Error(), "remaining_sends_stopped", stop)
+			r.Logger.Error("send_failed", "rule_id", rule.ID, "observed_at", pending.ObservedAt, "reason", err.Error(), "remaining_sends_stopped", stop)
 			failures = append(failures, fmt.Errorf("rule %q: %w", rule.ID, err))
 			if stop {
 				break
@@ -199,7 +200,7 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 		now := r.Now().UTC()
 		rs.Pending = nil
 		sent++
-		r.Logger.Info("pushover_accepted", "rule_id", rule.ID, "accepted_at", now)
+		r.Logger.Info("pushover_accepted", "rule_id", rule.ID, "observed_at", pending.ObservedAt, "accepted_at", now)
 		if err := store.save(ctx, state); err != nil {
 			return errors.Join(append(failures, err)...)
 		}
