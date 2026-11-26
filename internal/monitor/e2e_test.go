@@ -167,7 +167,7 @@ func TestE2EEpisodes(t *testing.T) {
 	h.prices("100", "5", "0", "50", "0", "-10")
 	h.beforePush = func() {
 		s := h.state()
-		if s.Version != 2 || !s.Rules[ruleKey("90", "above", 100, "")].Active || !s.Rules[ruleKey("80", "absolute-change", 10, "7d")].Active {
+		if s.Version != stateVersion || !s.Rules[ruleKey("90", "above", 100, "")].Active || !s.Rules[ruleKey("80", "absolute-change", 10, "7d")].Active {
 			t.Error("all evaluations must persist before first send")
 		}
 	}
@@ -501,7 +501,7 @@ func TestE2EStateAndDryRun(t *testing.T) {
 			t.Fatal("corrupt state table was removed")
 		}
 	})
-	for i, data := range []string{"{}", "null", "[]", "{\"version\":3,\"rules\":{}}", "{\"version\":2,\"rules\":null}", "{\"version\":2,\"rules\":{\"high\":{}}}"} {
+	for i, data := range []string{"{}", "null", "[]", "{\"version\":4,\"rules\":{}}", "{\"version\":3,\"rules\":null}", "{\"version\":3,\"rules\":{\"high\":{}}}"} {
 		t.Run(fmt.Sprintf("corrupt_%d", i), func(t *testing.T) {
 			h := newHarness(t, oneRule)
 			setPostgresTestStateJSON(t, []byte(data))
@@ -624,7 +624,7 @@ func TestCLIEnvironment(t *testing.T) {
 	if err := os.WriteFile(invalidConfig, []byte("rules: []"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	setPostgresTestStateJSON(t, []byte(`{"version":3,"rules":{}}`))
+	setPostgresTestStateJSON(t, []byte(`{"version":4,"rules":{}}`))
 	before, exists := postgresTestStateJSON(t)
 	if !exists {
 		t.Fatal("seeded PostgreSQL state row is missing")
@@ -651,14 +651,14 @@ func TestCLIEnvironment(t *testing.T) {
 		dbOverrides         map[string]string
 		stateEnv            *string
 	}{
-		{name: "env_only", config: h.options.ConfigPath, dry: "true", reason: "unsupported state version 3"},
+		{name: "env_only", config: h.options.ConfigPath, dry: "true", reason: "unsupported state version 4"},
 		{name: "config_flag", args: []string{"--config", invalidConfig}, config: h.options.ConfigPath, dry: "true", reason: "nonempty rules list"},
 		{name: "state_flag_removed", args: []string{"--state", "legacy.json"}, config: h.options.ConfigPath, dry: "true", reason: "not defined"},
 		{name: "dry_false_flag", args: []string{"--dry-run=false"}, config: h.options.ConfigPath, dry: "true", reason: "PUSHOVER_APP_TOKEN and PUSHOVER_USER_KEY are required"},
-		{name: "dry_true_flag", args: []string{"--dry-run"}, config: h.options.ConfigPath, dry: "false", reason: "unsupported state version 3"},
+		{name: "dry_true_flag", args: []string{"--dry-run"}, config: h.options.ConfigPath, dry: "false", reason: "unsupported state version 4"},
 		{name: "bad_dry", config: h.options.ConfigPath, dry: "yes", reason: "MARKETWATCH_DRY_RUN"},
 		{name: "empty_dry_is_false", config: h.options.ConfigPath, dry: "", reason: "PUSHOVER_APP_TOKEN and PUSHOVER_USER_KEY are required"},
-		{name: "numeric_true", config: h.options.ConfigPath, dry: "1", reason: "unsupported state version 3"},
+		{name: "numeric_true", config: h.options.ConfigPath, dry: "1", reason: "unsupported state version 4"},
 		{name: "empty_config", config: "", dry: "true", reason: "config path must be nonempty"},
 		{name: "missing_db_host", config: h.options.ConfigPath, dry: "true", reason: "DB_HOST", dbOverrides: map[string]string{"DB_HOST": ""}},
 		{name: "missing_db_name", config: h.options.ConfigPath, dry: "true", reason: "DB_NAME", dbOverrides: map[string]string{"DB_NAME": ""}},
@@ -668,7 +668,7 @@ func TestCLIEnvironment(t *testing.T) {
 		{name: "invalid_db_sslmode", config: h.options.ConfigPath, dry: "true", reason: "DB_SSLMODE must be disable, require, verify-ca or verify-full", dbOverrides: map[string]string{"DB_SSLMODE": "insecure"}},
 		{name: "bad_database_password", config: h.options.ConfigPath, dry: "true", reason: "PostgreSQL connect failed", dbOverrides: map[string]string{"DB_PASSWORD": "marketwatch-e2e-wrong-password"}},
 		{name: "state_env_removed", config: h.options.ConfigPath, dry: "true", reason: "MARKETWATCH_STATE is no longer supported", stateEnv: strPtr("")},
-		{name: "flag_overrides_bad_env", args: []string{"--config", h.options.ConfigPath, "--dry-run"}, config: "", dry: "bad", reason: "unsupported state version 3"},
+		{name: "flag_overrides_bad_env", args: []string{"--config", h.options.ConfigPath, "--dry-run"}, config: "", dry: "bad", reason: "unsupported state version 4"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -742,7 +742,7 @@ func TestE2ECaseVariantState(t *testing.T) {
 			rule := document["rules"].(map[string]any)[ruleKey("90", "absolute-change", 5, "24h")].(map[string]any)
 			switch variant {
 			case "version":
-				document["Version"] = 2
+				document["Version"] = stateVersion
 			case "active":
 				rule["Active"] = false
 			case "pending":
@@ -765,7 +765,7 @@ func TestE2ECaseVariantState(t *testing.T) {
 }
 
 func TestE2EInvalidMinimalState(t *testing.T) {
-	for _, variant := range []string{"legacy", "missing_active", "null_active", "unknown_rule", "unknown_pending", "missing_time", "empty_message", "title_without_group", "group_without_title", "null_group", "empty_group"} {
+	for _, variant := range []string{"missing_active", "null_active", "unknown_rule", "unknown_pending", "missing_time", "empty_message", "title_without_group", "group_without_title", "missing_title_and_group", "null_group", "empty_group"} {
 		t.Run(variant, func(t *testing.T) {
 			h := newHarness(t, oneRule)
 			h.pushStatus = 503
@@ -781,10 +781,6 @@ func TestE2EInvalidMinimalState(t *testing.T) {
 			rule := state["rules"].(map[string]any)[ruleKey("90", "absolute-change", 5, "24h")].(map[string]any)
 			pending := rule["pending"].(map[string]any)
 			switch variant {
-			case "legacy":
-				state["version"] = 1
-				rule["checked"] = true
-				pending["title"] = "Marketwatch"
 			case "missing_active":
 				delete(rule, "active")
 			case "null_active":
@@ -801,6 +797,9 @@ func TestE2EInvalidMinimalState(t *testing.T) {
 				delete(pending, "group_id")
 			case "group_without_title":
 				delete(pending, "title")
+			case "missing_title_and_group":
+				delete(pending, "title")
+				delete(pending, "group_id")
 			case "null_group":
 				pending["title"], pending["group_id"] = nil, nil
 			case "empty_group":
@@ -816,14 +815,11 @@ func TestE2EInvalidMinimalState(t *testing.T) {
 				t.Fatal("corrupt state row is missing")
 			}
 			gets := h.gets
-			runErr := h.run(true)
+			h.run(true)
 			h.sent(1)
 			after, exists := postgresTestStateJSON(t)
 			if h.gets != gets || !exists || !postgresTestJSONEqual(t, before, after) {
-				t.Fatal("invalid or legacy state used network or was overwritten")
-			}
-			if variant == "legacy" && !strings.Contains(runErr.Error(), "unsupported state version 1") {
-				t.Fatal("legacy state rejected without a clear version error")
+				t.Fatal("invalid state used network or was overwritten")
 			}
 		})
 	}
@@ -963,7 +959,6 @@ func TestE2EPriceAndPercentageEpisodes(t *testing.T) {
 		t.Fatalf("below alert: %q", got)
 	}
 	// Changing the high definition preserves the unchanged percentage activity.
-	before := h.state().Rules[moveKey].Fingerprint
 	h.config(`rules:
  - {coin: btc, threshold: 4, window: 24h}
  - {coin: btc, below: 80000}
@@ -973,7 +968,7 @@ func TestE2EPriceAndPercentageEpisodes(t *testing.T) {
 	h.sent(3)
 	state := h.state()
 	newMoveKey := ruleKey("90", "absolute-change", 4, "24h")
-	if state.Rules[newMoveKey].Active || !state.Rules[moveKey].Active || state.Rules[moveKey].Fingerprint != before || !strings.Contains(h.logs.String(), "rule_removed") || strings.Contains(h.logs.String(), "rule_reset") {
+	if state.Rules[newMoveKey].Active || !state.Rules[moveKey].Active || !strings.Contains(h.logs.String(), "rule_removed") {
 		t.Fatal("condition reconciliation")
 	}
 }

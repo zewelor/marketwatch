@@ -39,6 +39,18 @@ state across recovery.
 With Go 1.27.4, run from source with
 `go run ./cmd/marketwatch check --config config.yaml --dry-run`.
 
+### Upgrade from state version 2
+
+Version 3 requires a fresh state table. Pause scheduled checks and drop
+`public.marketwatch_state` in the Marketwatch database before starting the new
+version. The first non-dry run recreates it. Resetting the table discards queued
+notifications and alert activity, so rules already meeting their conditions
+can alert again on that first run.
+
+```sql
+DROP TABLE IF EXISTS public.marketwatch_state;
+```
+
 ## Rules
 
 ```yaml

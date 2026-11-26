@@ -70,33 +70,8 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 	present := map[string]bool{}
 	for _, rule := range rules {
 		present[rule.ID] = true
-	}
-	// Version-2 state may still use manually named keys. Preserve matching
-	// definitions, but never silently choose between conflicting entries.
-	rekeyed := make(map[string]*RuleState, len(state.Rules))
-	for id, old := range state.Rules {
-		key := id
-		if present[old.Fingerprint] {
-			key = old.Fingerprint
-		}
-		if rekeyed[key] != nil {
-			return fmt.Errorf("ambiguous state entries for rule fingerprint %s; state left unchanged", key)
-		}
-		rekeyed[key] = old
-	}
-	for id, old := range state.Rules {
-		if present[old.Fingerprint] && id != old.Fingerprint {
-			r.Logger.Info("rule_id_migrated", "previous_rule_id", id, "rule_id", old.Fingerprint, "dry_run", opts.DryRun)
-		}
-	}
-	state.Rules = rekeyed
-	for _, rule := range rules {
-		old := state.Rules[rule.ID]
-		if old == nil || old.Fingerprint != rule.ID {
-			if old != nil {
-				r.Logger.Warn("rule_reset", "rule_id", rule.ID, "pending_lost", old.Pending != nil)
-			}
-			state.Rules[rule.ID] = &RuleState{Fingerprint: rule.ID}
+		if state.Rules[rule.ID] == nil {
+			state.Rules[rule.ID] = &RuleState{}
 		}
 	}
 	for id, old := range state.Rules {
@@ -185,7 +160,7 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 	deliveries := state.pendingDeliveries(rules)
 	if opts.DryRun {
 		for _, delivery := range deliveries {
-			r.Logger.Info("would_send", "rule_id", delivery.ruleIDs[0], "rule_ids", delivery.ruleIDs, "group_id", delivery.GroupID, "observed_at", delivery.ObservedAt, "title", delivery.title(), "message", delivery.Message)
+			r.Logger.Info("would_send", "rule_id", delivery.ruleIDs[0], "rule_ids", delivery.ruleIDs, "group_id", delivery.GroupID, "observed_at", delivery.ObservedAt, "title", delivery.Title, "message", delivery.Message)
 		}
 		return errors.Join(failures...)
 	}

@@ -1,7 +1,7 @@
 package monitor
 
 import (
-	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -28,7 +28,7 @@ func TestE2EAutomaticRuleFingerprints(t *testing.T) {
 	h.sent(1)
 	original := h.state()
 	for _, id := range []string{btcAbove86000, btcAbove90000, btcBelow80000, btcMovement3} {
-		if r := original.Rules[id]; r == nil || r.Fingerprint != id {
+		if original.Rules[id] == nil {
 			t.Fatalf("missing expected canonical fingerprint %s", id)
 		}
 	}
@@ -85,72 +85,29 @@ func TestE2EAutomaticRuleFingerprints(t *testing.T) {
 	}
 }
 
-func writeLegacyState(t *testing.T, h *harness, rules map[string]*RuleState) []byte {
-	t.Helper()
-	data, err := json.MarshalIndent(State{Version: 2, Rules: rules}, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	setPostgresTestStateJSON(t, data)
-	stored, exists := postgresTestStateJSON(t)
-	if !exists {
-		t.Fatal("seeded PostgreSQL state row is missing")
-	}
-	return stored
-}
+func TestE2EStateVersion2RequiresReset(t *testing.T) {
+	h := newHarness(t, "rules:\n  - {coin: btc, above: 86000}\n")
+	h.prices("86500.25", "0", "0", "50", "0", "0")
+	old := []byte(fmt.Sprintf(`{"version":2,"rules":{%q:{"fingerprint":%q,"active":true,"pending":{"observed_at":%q,"message":"BTC 86,500.25 USD (threshold ≥ 86,000)"}}}}`,
+		btcAbove86000, btcAbove86000, h.now.Format(time.RFC3339)))
+	setPostgresTestStateJSON(t, old)
 
-func TestE2ELegacyRuleFingerprintMigration(t *testing.T) {
-	h := newHarness(t, `rules:
-  - {coin: btc, above: 86000}
-  - {coin: btc, below: 80000}
-`)
-	pending := &Pending{ObservedAt: h.now.Add(-time.Hour), Message: "Original pending BTC alert from the previous configuration"}
-	before := writeLegacyState(t, h, map[string]*RuleState{
-		"btc-high": {Fingerprint: btcAbove86000, Active: true, Pending: pending},
-		"btc-low":  {Fingerprint: btcBelow80000},
-	})
-	h.marketStatus = 503
-	h.options.DryRun = true
-	h.run(true)
+	err := h.run(true)
 	h.sent(0)
-	afterPreview, exists := postgresTestStateJSON(t)
-	if !exists || !postgresTestJSONEqual(t, before, afterPreview) || !strings.Contains(h.logs.String(), "would_send") {
-		t.Fatal("migration preview wrote state or lost pending")
+	after, exists := postgresTestStateJSON(t)
+	if !strings.Contains(err.Error(), "unsupported state version 2 (expected 3)") ||
+		h.gets != 0 || !exists || !postgresTestJSONEqual(t, old, after) {
+		t.Fatalf("old state must fail before external HTTP and stay intact: %v", err)
 	}
 
-	h.options.DryRun = false
-	h.run(true) // A provider outage must not block delivery of migrated pending.
-	h.sent(1)
-	state := h.state()
-	if len(state.Rules) != 2 || state.Rules["btc-high"] != nil || state.Rules["btc-low"] != nil || state.Rules[btcAbove86000] == nil || state.Rules[btcBelow80000] == nil {
-		t.Fatal("legacy state keys were not replaced with fingerprints")
-	}
-	if !state.Rules[btcAbove86000].Active || state.Rules[btcAbove86000].Pending != nil || h.messages[0].Get("message") != pending.Message {
-		t.Fatal("migration lost activity or changed the pending notification")
-	}
-	if !strings.Contains(h.logs.String(), "rule_id_migrated") || strings.Contains(h.logs.String(), "pending_lost") {
-		t.Fatal("migration was not logged or discarded a pending message")
-	}
-	h.marketStatus = 200
-	h.prices("86000", "0", "0", "50", "0", "0")
+	resetPostgresTestState(t)
 	h.run(false)
 	h.sent(1)
-}
-
-func TestE2EAmbiguousLegacyFingerprints(t *testing.T) {
-	for _, secondKey := range []string{"other-manual-id", btcAbove86000} {
-		t.Run(secondKey, func(t *testing.T) {
-			h := newHarness(t, "rules:\n  - {coin: btc, above: 86000}\n")
-			before := writeLegacyState(t, h, map[string]*RuleState{
-				"btc-high": {Fingerprint: btcAbove86000, Active: true, Pending: &Pending{ObservedAt: h.now, Message: "First pending message"}},
-				secondKey:  {Fingerprint: btcAbove86000, Active: false, Pending: &Pending{ObservedAt: h.now, Message: "Second pending message"}},
-			})
-			err := h.run(true)
-			h.sent(0)
-			after, exists := postgresTestStateJSON(t)
-			if !strings.Contains(err.Error(), "ambiguous") || h.gets != 0 || !exists || !postgresTestJSONEqual(t, before, after) {
-				t.Fatal("ambiguous legacy state used HTTP, was overwritten, or was not reported explicitly")
-			}
-		})
+	state := h.state()
+	if state.Version != stateVersion || !state.Rules[btcAbove86000].Active {
+		t.Fatal("fresh table did not initialize new state and record the alert")
+	}
+	if push := h.messages[0]; push.Get("title") != "BTC | 86,500.25 USD" || push.Get("message") != "Price alert" || push.Get("timestamp") == "" {
+		t.Fatalf("unexpected notification after reset: %v", push)
 	}
 }
