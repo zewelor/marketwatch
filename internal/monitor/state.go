@@ -9,20 +9,51 @@ import (
 	"time"
 )
 
-const stateVersion = 2
+const stateVersion = 3
 
 type Pending struct {
 	ObservedAt time.Time `json:"observed_at"`
+	Title      string    `json:"title"`
 	Message    string    `json:"message"`
+	GroupID    string    `json:"group_id"`
 }
 type RuleState struct {
-	Fingerprint string   `json:"fingerprint"`
-	Active      bool     `json:"active"`
-	Pending     *Pending `json:"pending,omitempty"`
+	Active  bool     `json:"active"`
+	Pending *Pending `json:"pending,omitempty"`
 }
 type State struct {
 	Version int                   `json:"version"`
 	Rules   map[string]*RuleState `json:"rules"`
+}
+
+type pendingDelivery struct {
+	*Pending
+	ruleIDs []string
+}
+
+func (s State) pendingDeliveries(rules []Rule) []pendingDelivery {
+	var deliveries []pendingDelivery
+	index := map[*Pending]int{}
+	for _, rule := range rules {
+		pending := s.Rules[rule.ID].Pending
+		if pending == nil {
+			continue
+		}
+		i, found := index[pending]
+		if !found {
+			i = len(deliveries)
+			index[pending] = i
+			deliveries = append(deliveries, pendingDelivery{Pending: pending})
+		}
+		deliveries[i].ruleIDs = append(deliveries[i].ruleIDs, rule.ID)
+	}
+	return deliveries
+}
+
+func (d pendingDelivery) clear(s State) {
+	for _, id := range d.ruleIDs {
+		s.Rules[id].Pending = nil
+	}
 }
 
 func emptyState() State {
@@ -53,16 +84,17 @@ func decodeState(data []byte) (State, error) {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return State{}, fmt.Errorf("invalid state: %w", err)
 	}
+	groups := map[string]*Pending{}
 	for id, r := range s.Rules {
-		if id == "" || r == nil {
+		if r == nil {
 			return State{}, errors.New("invalid state rule")
 		}
-		if err := exactFields(raw.Rules[id], "fingerprint", "active", "pending"); err != nil {
+		if err := exactFields(raw.Rules[id], "active", "pending"); err != nil {
 			return State{}, fmt.Errorf("rule %q: %w", id, err)
 		}
-		digest, err := hex.DecodeString(r.Fingerprint)
-		if err != nil || len(digest) != 32 {
-			return State{}, fmt.Errorf("rule %q: invalid fingerprint", id)
+		digest, err := hex.DecodeString(id)
+		if err != nil || len(digest) != 32 || hex.EncodeToString(digest) != id {
+			return State{}, fmt.Errorf("invalid rule fingerprint %q", id)
 		}
 		if value, ok := raw.Rules[id]["active"]; !ok || bytes.Equal(value, []byte("null")) {
 			return State{}, fmt.Errorf("rule %q: missing active", id)
@@ -72,11 +104,20 @@ func decodeState(data []byte) (State, error) {
 			if err := json.Unmarshal(raw.Rules[id]["pending"], &pending); err != nil {
 				return State{}, err
 			}
-			if err := exactFields(pending, "observed_at", "message"); err != nil {
+			if err := exactFields(pending, "observed_at", "message", "title", "group_id"); err != nil {
 				return State{}, fmt.Errorf("rule %q: %w", id, err)
 			}
-			if p.ObservedAt.IsZero() || p.Message == "" {
+			if p.ObservedAt.IsZero() || p.Title == "" || p.Message == "" || p.GroupID == "" {
 				return State{}, fmt.Errorf("rule %q: invalid pending", id)
+			}
+			// Restore sharing among rule slots after decoding persisted copies.
+			if group := groups[p.GroupID]; group != nil {
+				if !group.ObservedAt.Equal(p.ObservedAt) || group.Title != p.Title || group.Message != p.Message {
+					return State{}, fmt.Errorf("rule %q: inconsistent pending group", id)
+				}
+				r.Pending = group
+			} else {
+				groups[p.GroupID] = p
 			}
 		}
 	}

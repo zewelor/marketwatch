@@ -2,11 +2,14 @@ package monitor
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -67,33 +70,8 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 	present := map[string]bool{}
 	for _, rule := range rules {
 		present[rule.ID] = true
-	}
-	// Version-2 state may still use manually named keys. Preserve matching
-	// definitions, but never silently choose between conflicting entries.
-	rekeyed := make(map[string]*RuleState, len(state.Rules))
-	for id, old := range state.Rules {
-		key := id
-		if present[old.Fingerprint] {
-			key = old.Fingerprint
-		}
-		if rekeyed[key] != nil {
-			return fmt.Errorf("ambiguous state entries for rule fingerprint %s; state left unchanged", key)
-		}
-		rekeyed[key] = old
-	}
-	for id, old := range state.Rules {
-		if present[old.Fingerprint] && id != old.Fingerprint {
-			r.Logger.Info("rule_id_migrated", "previous_rule_id", id, "rule_id", old.Fingerprint, "dry_run", opts.DryRun)
-		}
-	}
-	state.Rules = rekeyed
-	for _, rule := range rules {
-		old := state.Rules[rule.ID]
-		if old == nil || old.Fingerprint != rule.ID {
-			if old != nil {
-				r.Logger.Warn("rule_reset", "rule_id", rule.ID, "pending_lost", old.Pending != nil)
-			}
-			state.Rules[rule.ID] = &RuleState{Fingerprint: rule.ID}
+		if state.Rules[rule.ID] == nil {
+			state.Rules[rule.ID] = &RuleState{}
 		}
 	}
 	for id, old := range state.Rules {
@@ -103,13 +81,12 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 		}
 	}
 	var failures []error
-	for _, rule := range rules {
-		rs := state.Rules[rule.ID]
-		if rs.Pending != nil && r.Now().Sub(rs.Pending.ObservedAt) >= pendingLifetime {
-			r.Logger.Warn("pending_expired", "rule_id", rule.ID, "observed_at", rs.Pending.ObservedAt)
-			rs.Pending = nil
+	for _, delivery := range state.pendingDeliveries(rules) {
+		if r.Now().Sub(delivery.ObservedAt) >= pendingLifetime {
+			delivery.clear(state)
 			expired++
-			failures = append(failures, fmt.Errorf("rule %q: pending expired without delivery", rule.ID))
+			r.Logger.Warn("pending_expired", "rule_id", delivery.ruleIDs[0], "rule_ids", delivery.ruleIDs, "group_id", delivery.GroupID, "observed_at", delivery.ObservedAt)
+			failures = append(failures, fmt.Errorf("rules %v: pending expired without delivery", delivery.ruleIDs))
 		}
 	}
 	quotes, fetchErr := r.fetch(ctx, rules)
@@ -117,6 +94,11 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 		r.Logger.Error("market_unavailable", "reason", fetchErr.Error())
 		failures = append(failures, fetchErr)
 	}
+	type observationAlert struct {
+		pending *Pending
+		changes map[Window]float64
+	}
+	alerts := map[string]observationAlert{}
 	for _, rule := range rules {
 		if fetchErr != nil {
 			continue
@@ -139,6 +121,7 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 		evaluated++
 		rs := state.Rules[rule.ID]
 		decision := "unchanged"
+		var groupID string
 		if rs.Active {
 			if rule.rearmed(value) {
 				rs.Active = false
@@ -147,57 +130,71 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 		} else if rule.triggered(value) {
 			rs.Active = true
 			decision = "alert"
+			alert, found := alerts[rule.Coin]
+			if !found {
+				alert = observationAlert{
+					pending: &Pending{
+						ObservedAt: q.fetchedAt,
+						Title:      fmt.Sprintf("%s | %s USD", rule.Symbol, formatPrice(q.price)),
+						GroupID:    rand.Text(),
+					},
+					changes: map[Window]float64{},
+				}
+				alerts[rule.Coin] = alert
+				created++
+			}
+			if rule.Window != WindowNone {
+				alert.changes[rule.Window] = value
+			}
+			groupID = alert.pending.GroupID
 			if rs.Pending != nil {
-				r.Logger.Warn("pending_replaced", "rule_id", rule.ID, "lost_observed_at", rs.Pending.ObservedAt)
+				r.Logger.Warn("pending_replaced", "rule_id", rule.ID, "lost_observed_at", rs.Pending.ObservedAt, "group_id", rs.Pending.GroupID, "new_group_id", groupID)
 			}
-			rs.Pending = render(rule, q.price, value, q.fetchedAt)
-			created++
+			rs.Pending = alert.pending
 		}
-		r.Logger.Info("rule_evaluated", "source", coinLore.Name, "rule_id", rule.ID, "coin", rule.Coin, "currency", "USD", "condition", rule.Condition, "threshold", rule.Threshold, "price", q.price, "window", rule.Window, "value", value, "fetched_at", q.fetchedAt, "decision", decision, "active", rs.Active, "pending", rs.Pending != nil, "dry_run", opts.DryRun)
+		r.Logger.Info("rule_evaluated", "group_id", groupID, "source", coinLore.Name, "rule_id", rule.ID, "coin", rule.Coin, "currency", "USD", "condition", rule.Condition, "threshold", rule.Threshold, "price", q.price, "window", rule.Window, "value", value, "fetched_at", q.fetchedAt, "decision", decision, "active", rs.Active, "pending", rs.Pending != nil, "dry_run", opts.DryRun)
 	}
+	for _, alert := range alerts {
+		alert.pending.Message = formatChanges(alert.changes)
+	}
+	deliveries := state.pendingDeliveries(rules)
 	if opts.DryRun {
-		for _, rule := range rules {
-			if p := state.Rules[rule.ID].Pending; p != nil {
-				r.Logger.Info("would_send", "rule_id", rule.ID, "observed_at", p.ObservedAt, "message", p.Message)
-			}
+		for _, delivery := range deliveries {
+			r.Logger.Info("would_send", "rule_id", delivery.ruleIDs[0], "rule_ids", delivery.ruleIDs, "group_id", delivery.GroupID, "observed_at", delivery.ObservedAt, "title", delivery.Title, "message", delivery.Message)
 		}
 		return errors.Join(failures...)
 	}
 	if err := store.save(ctx, state); err != nil {
 		return errors.Join(append(failures, err)...)
 	}
-	for _, rule := range rules {
-		rs := state.Rules[rule.ID]
-		if rs.Pending == nil {
-			continue
-		}
+	for _, delivery := range deliveries {
 		if err := ctx.Err(); err != nil {
 			return errors.Join(append(failures, err)...)
 		}
 		// Network time can move an event across the expiry boundary.
-		if r.Now().Sub(rs.Pending.ObservedAt) >= pendingLifetime {
-			rs.Pending = nil
+		if r.Now().Sub(delivery.ObservedAt) >= pendingLifetime {
+			delivery.clear(state)
 			expired++
-			failures = append(failures, fmt.Errorf("rule %q: pending expired before send", rule.ID))
-			r.Logger.Warn("pending_expired", "rule_id", rule.ID)
+			failures = append(failures, fmt.Errorf("rules %v: pending expired before send", delivery.ruleIDs))
+			r.Logger.Warn("pending_expired", "rule_id", delivery.ruleIDs[0], "rule_ids", delivery.ruleIDs, "group_id", delivery.GroupID, "observed_at", delivery.ObservedAt)
 			if err := store.save(ctx, state); err != nil {
 				return errors.Join(append(failures, err)...)
 			}
 			continue
 		}
-		stop, err := r.send(ctx, rs.Pending, opts)
+		stop, err := r.send(ctx, delivery.Pending, opts)
 		if err != nil {
-			r.Logger.Error("send_failed", "rule_id", rule.ID, "reason", err.Error(), "remaining_sends_stopped", stop)
-			failures = append(failures, fmt.Errorf("rule %q: %w", rule.ID, err))
+			r.Logger.Error("send_failed", "rule_id", delivery.ruleIDs[0], "rule_ids", delivery.ruleIDs, "group_id", delivery.GroupID, "observed_at", delivery.ObservedAt, "reason", err.Error(), "remaining_sends_stopped", stop)
+			failures = append(failures, fmt.Errorf("rules %v: %w", delivery.ruleIDs, err))
 			if stop {
 				break
 			}
 			continue
 		}
 		now := r.Now().UTC()
-		rs.Pending = nil
+		delivery.clear(state)
 		sent++
-		r.Logger.Info("pushover_accepted", "rule_id", rule.ID, "accepted_at", now)
+		r.Logger.Info("pushover_accepted", "rule_id", delivery.ruleIDs[0], "rule_ids", delivery.ruleIDs, "group_id", delivery.GroupID, "observed_at", delivery.ObservedAt, "accepted_at", now)
 		if err := store.save(ctx, state); err != nil {
 			return errors.Join(append(failures, err)...)
 		}
@@ -205,6 +202,42 @@ func (r *Runner) Run(ctx context.Context, opts Options) (result error) {
 	return errors.Join(failures...)
 }
 
-func render(rule Rule, price, value float64, fetchedAt time.Time) *Pending {
-	return &Pending{ObservedAt: fetchedAt, Message: rule.formatMessage(price, value)}
+func formatChanges(changes map[Window]float64) string {
+	var parts []string
+	for _, window := range []Window{Window24h, Window7d} {
+		value, present := changes[window]
+		if !present {
+			continue
+		}
+		sign := "+"
+		if value < 0 {
+			sign = "−"
+		}
+		parts = append(parts, fmt.Sprintf("%s %s%g%%", window, sign, math.Abs(value)))
+	}
+	if len(parts) == 0 {
+		return "Price alert"
+	}
+	return strings.Join(parts, " | ")
+}
+
+func formatPrice(value float64) string {
+	amount := strconv.FormatFloat(value, 'f', -1, 64)
+	// Keep unusually long prices compact enough for a notification title.
+	if len(amount) > 24 {
+		return strconv.FormatFloat(value, 'g', -1, 64)
+	}
+	whole, fraction, hasFraction := strings.Cut(amount, ".")
+	var grouped strings.Builder
+	for i := range len(whole) {
+		if i > 0 && (len(whole)-i)%3 == 0 {
+			grouped.WriteByte(',')
+		}
+		grouped.WriteByte(whole[i])
+	}
+	if hasFraction {
+		grouped.WriteByte('.')
+		grouped.WriteString(fraction)
+	}
+	return grouped.String()
 }

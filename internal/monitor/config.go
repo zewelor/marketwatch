@@ -11,15 +11,13 @@ import (
 	"math"
 	"os"
 	"strconv"
-	"strings"
 
 	"go.yaml.in/yaml/v4"
 )
 
 const (
-	changeMargin   = 0.5
-	priceMargin    = 0.005
-	thresholdLabel = "threshold"
+	changeMargin = 0.5
+	priceMargin  = 0.005
 )
 
 // Condition identifies how a rule evaluates a market quote.
@@ -45,7 +43,6 @@ type conditionSpec struct {
 	margin         float64
 	triggered      func(value, threshold float64) bool
 	rearmed        func(value, threshold float64) bool
-	detail         func(rule Rule, value float64) string
 }
 
 var conditionSpecs = map[Condition]conditionSpec{
@@ -53,13 +50,11 @@ var conditionSpecs = map[Condition]conditionSpec{
 		margin:    priceMargin,
 		triggered: func(value, threshold float64) bool { return value >= threshold },
 		rearmed:   func(value, threshold float64) bool { return value < threshold-threshold*priceMargin },
-		detail:    formatPriceDetail("≥"),
 	},
 	ConditionBelow: {
 		margin:    priceMargin,
 		triggered: func(value, threshold float64) bool { return value <= threshold },
 		rearmed:   func(value, threshold float64) bool { return value > threshold+threshold*priceMargin },
-		detail:    formatPriceDetail("≤"),
 	},
 	ConditionAbsoluteChange: {
 		requiresWindow: true,
@@ -71,44 +66,12 @@ var conditionSpecs = map[Condition]conditionSpec{
 			}
 			return math.Abs(value) < threshold-changeMargin
 		},
-		detail: formatChangeDetail,
 	},
 }
 
 var windowQuotes = map[Window]func(quote) (float64, error){
 	Window24h: func(q quote) (float64, error) { return q.day, q.dayErr },
 	Window7d:  func(q quote) (float64, error) { return q.week, q.weekErr },
-}
-
-func formatPriceDetail(operator string) func(Rule, float64) string {
-	return func(rule Rule, _ float64) string {
-		return fmt.Sprintf("(%s %s %s)", thresholdLabel, operator, formatPrice(rule.Threshold))
-	}
-}
-
-func formatChangeDetail(rule Rule, value float64) string {
-	sign := "+"
-	if value < 0 {
-		sign = "−"
-	}
-	return fmt.Sprintf("· %s%g%% in %s (%s ±%g%%)", sign, math.Abs(value), rule.Window, thresholdLabel, rule.Threshold)
-}
-
-func formatPrice(value float64) string {
-	amount := strconv.FormatFloat(value, 'f', -1, 64)
-	whole, fraction, hasFraction := strings.Cut(amount, ".")
-	var grouped strings.Builder
-	for i := range len(whole) {
-		if i > 0 && (len(whole)-i)%3 == 0 {
-			grouped.WriteByte(',')
-		}
-		grouped.WriteByte(whole[i])
-	}
-	if hasFraction {
-		grouped.WriteByte('.')
-		grouped.WriteString(fraction)
-	}
-	return grouped.String()
 }
 
 type Rule struct {
@@ -239,7 +202,4 @@ func (r Rule) triggered(value float64) bool {
 }
 func (r Rule) rearmed(value float64) bool {
 	return r.spec().rearmed(value, r.Threshold)
-}
-func (r Rule) formatMessage(price, value float64) string {
-	return fmt.Sprintf("%s %s USD %s", r.Symbol, formatPrice(price), r.spec().detail(r, value))
 }

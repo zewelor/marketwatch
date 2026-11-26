@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -166,37 +167,34 @@ func TestE2EEpisodes(t *testing.T) {
 	h.prices("100", "5", "0", "50", "0", "-10")
 	h.beforePush = func() {
 		s := h.state()
-		if s.Version != 2 || !s.Rules[ruleKey("90", "above", 100, "")].Active || !s.Rules[ruleKey("80", "absolute-change", 10, "7d")].Active {
+		if s.Version != stateVersion || !s.Rules[ruleKey("90", "above", 100, "")].Active || !s.Rules[ruleKey("80", "absolute-change", 10, "7d")].Active {
 			t.Error("all evaluations must persist before first send")
 		}
 	}
 	h.run(false)
-	h.sent(4)
+	h.sent(2)
 	if h.ids != "90,80" {
 		t.Fatalf("dedup/canonical IDs: %q", h.ids)
 	}
-	wantMessages := []string{
-		"BTC 100 USD (threshold ≥ 100)",
-		"ETH 50 USD (threshold ≤ 50)",
-		"BTC 100 USD · +5% in 24h (threshold ±5%)",
-		"ETH 50 USD · −10% in 7d (threshold ±10%)",
-	}
+	wantTitles := []string{"BTC | 100 USD", "ETH | 50 USD"}
+	wantMessages := []string{"24h +5%", "7d −10%"}
 	for i, m := range h.messages {
 		if m.Get("url") != "" || m.Get("url_title") != "" {
 			t.Error("unexpected attribution")
 		}
-		if m.Get("title") != "Marketwatch" || m.Get("message") != wantMessages[i] {
-			t.Fatalf("message: %v; want %q", m, wantMessages[i])
+		if m.Get("title") != wantTitles[i] || m.Get("message") != wantMessages[i] ||
+			m.Get("timestamp") != strconv.FormatInt(h.now.Unix(), 10) {
+			t.Fatalf("notification: %v; want %q and %q at %s", m, wantTitles[i], wantMessages[i], h.now)
 		}
 	}
 	h.beforePush = nil
 	h.now = h.now.Add(time.Hour)
 	h.run(false)
-	h.sent(4)
+	h.sent(2)
 	// Exactly at rearm margins remains active.
 	h.prices("99.5", "4.5", "0", "50.25", "0", "-9.5")
 	h.run(false)
-	h.sent(4)
+	h.sent(2)
 	for _, r := range h.state().Rules {
 		if !r.Active {
 			t.Error("equality rearmed")
@@ -204,7 +202,7 @@ func TestE2EEpisodes(t *testing.T) {
 	}
 	h.prices("99.49", "4.49", "0", "50.26", "0", "-9.49")
 	h.run(false)
-	h.sent(4)
+	h.sent(2)
 	for _, r := range h.state().Rules {
 		if r.Active {
 			t.Error("strict margin failed to rearm")
@@ -212,14 +210,14 @@ func TestE2EEpisodes(t *testing.T) {
 	}
 	h.prices("100", "5", "0", "50", "0", "-10")
 	h.run(false)
-	h.sent(8)
-	if h.messages[4].Get("message") != wantMessages[0] {
+	h.sent(4)
+	if h.messages[2].Get("message") != wantMessages[0] {
 		t.Error("later episode must use the same concise format")
 	}
 	// YAML order and canonical spelling do not reset.
 	h.config("rules:\n - {coin: \"80\", threshold: 10, window: 7d}\n - {coin: \"90\", threshold: 5, window: 24h}\n - {coin: \"80\", below: 50}\n - {coin: \"90\", above: 100}\n")
 	h.run(false)
-	h.sent(8)
+	h.sent(4)
 }
 
 func TestE2EPendingSequences(t *testing.T) {
@@ -228,11 +226,29 @@ func TestE2EPendingSequences(t *testing.T) {
 	h.run(true)
 	h.sent(1)
 	key := ruleKey("90", "absolute-change", 5, "24h")
-	original := h.state().Rules[key].Pending.Message
+	requireObservationLog := func(event string, observedAt time.Time) {
+		t.Helper()
+		for _, line := range strings.Split(strings.TrimSpace(h.logs.String()), "\n") {
+			var record struct {
+				Event      string    `json:"msg"`
+				RuleID     string    `json:"rule_id"`
+				ObservedAt time.Time `json:"observed_at"`
+			}
+			if err := json.Unmarshal([]byte(line), &record); err != nil {
+				t.Fatal(err)
+			}
+			if record.Event == event && record.RuleID == key && record.ObservedAt.Equal(observedAt) {
+				return
+			}
+		}
+		t.Fatalf("missing %s with rule_id=%s and observed_at=%s", event, key, observedAt)
+	}
+	firstObservedAt := h.now
 	h.now = h.now.Add(time.Hour)
 	h.prices("99", "0", "0", "50", "0", "0")
 	h.run(true)
 	h.sent(2)
+	requireObservationLog("send_failed", firstObservedAt)
 	if h.state().Rules[key].Active || h.state().Rules[key].Pending == nil {
 		t.Fatal("rearm removed pending")
 	}
@@ -241,7 +257,7 @@ func TestE2EPendingSequences(t *testing.T) {
 	h.run(true)
 	h.sent(3)
 	p := h.state().Rules[key].Pending
-	if p.Message == original || !p.ObservedAt.Equal(h.now) || !strings.Contains(h.logs.String(), "pending_replaced") {
+	if p.Title != "BTC | 101 USD" || p.Message != "24h −5%" || !p.ObservedAt.Equal(h.now) || !strings.Contains(h.logs.String(), "pending_replaced") {
 		t.Fatal("new episode did not replace pending")
 	}
 	h.pushStatus = 200
@@ -249,10 +265,85 @@ func TestE2EPendingSequences(t *testing.T) {
 	h.now = h.now.Add(time.Hour)
 	h.run(true)
 	h.sent(4)
-	if h.messages[3].Get("message") != p.Message || h.messages[3].Get("title") != "Marketwatch" || h.state().Rules[key].Pending != nil {
-		t.Fatal("retry must use persisted message and save success despite market failure")
+	requireObservationLog("pushover_accepted", p.ObservedAt)
+	if h.messages[3].Get("message") != p.Message || h.messages[3].Get("title") != p.Title || h.messages[3].Get("timestamp") != strconv.FormatInt(p.ObservedAt.Unix(), 10) || h.state().Rules[key].Pending != nil {
+		t.Fatal("retry must send the concise saved alert and record success despite market failure")
 	}
 	h.marketStatus = 200
+	h.run(false)
+	h.sent(4)
+}
+
+func TestE2EGroupedAlertsRetryWithoutCombiningObservations(t *testing.T) {
+	h := newHarness(t, `rules:
+  - {coin: btc, threshold: 8, window: 7d}
+  - {coin: btc, above: 86000}
+  - {coin: btc, threshold: 3, window: 24h}
+  - {coin: btc, threshold: 4, window: 24h}
+`)
+	groupLogCount := func(event, groupID string) int {
+		t.Helper()
+		count := 0
+		for _, line := range strings.Split(strings.TrimSpace(h.logs.String()), "\n") {
+			var record struct {
+				Event   string `json:"msg"`
+				GroupID string `json:"group_id"`
+			}
+			if err := json.Unmarshal([]byte(line), &record); err != nil {
+				t.Fatal(err)
+			}
+			if record.Event == event && record.GroupID == groupID {
+				count++
+			}
+		}
+		return count
+	}
+	h.prices("86500.25", "-4", "8", "50", "0", "0")
+	h.pushStatus = 503
+	h.run(true)
+	h.sent(1)
+	first := h.messages[0]
+	if first.Get("title") != "BTC | 86,500.25 USD" || first.Get("message") != "24h −4% | 7d +8%" {
+		t.Fatalf("first read did not group the two windows: %v", first)
+	}
+	state := h.state()
+	for _, rule := range state.Rules {
+		if !rule.Active || rule.Pending == nil {
+			t.Fatal("failed grouped delivery lost a rule or its pending alert")
+		}
+	}
+	groupID := state.Rules[ruleKey("90", "above", 86000, "")].Pending.GroupID
+	if groupID == "" || groupLogCount("rule_evaluated", groupID) != 4 || groupLogCount("send_failed", groupID) != 1 {
+		t.Fatal("send failure must be traceable to all four evaluations")
+	}
+	h.now = h.now.Add(time.Minute)
+	h.prices("87000", "0", "8", "50", "0", "0")
+	h.run(true)
+	h.sent(2)
+	if h.messages[1].Encode() != first.Encode() {
+		t.Fatal("retry changed the original notification")
+	}
+	h.now = h.now.Add(time.Minute)
+	h.prices("87500", "4", "8", "50", "0", "0")
+	h.pushStatus = 200
+	h.run(false)
+	h.sent(4)
+	if h.messages[2].Encode() != first.Encode() {
+		t.Fatal("later observation modified the pending notification")
+	}
+	if groupLogCount("pushover_accepted", groupID) != 1 {
+		t.Fatal("accepted retry must identify the original group")
+	}
+	newAlert := h.messages[3]
+	if newAlert.Get("title") != "BTC | 87,500 USD" || newAlert.Get("message") != "24h +4%" ||
+		newAlert.Get("timestamp") == first.Get("timestamp") {
+		t.Fatalf("later observation should be a separate alert: %v", newAlert)
+	}
+	for _, rule := range h.state().Rules {
+		if !rule.Active || rule.Pending != nil {
+			t.Fatal("acknowledging the group did not clear every pending rule")
+		}
+	}
 	h.run(false)
 	h.sent(4)
 }
@@ -280,8 +371,15 @@ func TestE2EExpiryAndConfigChange(t *testing.T) {
 	h.config("rules:\n - {coin: \"90\", threshold: 4, window: 24h}\n - {coin: \"90\", threshold: 5, window: 24h}\n")
 	h.run(false)
 	h.sent(2)
-	if len(h.state().Rules) != 2 || h.messages[1].Get("message") != "BTC 100 USD · +5% in 24h (threshold ±4%)" {
-		t.Fatal("config reconciliation")
+	rules := h.state().Rules
+	if len(rules) != 2 {
+		t.Fatal("config reconciliation must keep exactly two rules")
+	}
+	for _, threshold := range []float64{4, 5} {
+		rule := rules[ruleKey("90", "absolute-change", threshold, "24h")]
+		if rule == nil || !rule.Active {
+			t.Fatalf("expected active rule for threshold %g", threshold)
+		}
 	}
 }
 
@@ -290,11 +388,11 @@ func TestE2EPartialData(t *testing.T) {
 		name, market string
 		sent         int
 	}{
-		{"missing", "[{\"id\":\"90\",\"price_usd\":\"100\",\"percent_change_24h\":\"5\"}]", 2},
-		{"duplicate", "[{\"id\":\"90\",\"price_usd\":\"100\"},{\"id\":\"90\",\"price_usd\":\"100\"},{\"id\":\"80\",\"price_usd\":\"50\",\"percent_change_7d\":\"-10\"}]", 2},
-		{"bad_price", "[{\"id\":\"90\",\"price_usd\":\"NaN\",\"percent_change_24h\":\"5\"},{\"id\":\"80\",\"price_usd\":\"50\",\"percent_change_7d\":\"-10\"}]", 2},
-		{"window_null", "[{\"id\":\"90\",\"price_usd\":\"100\",\"percent_change_24h\":null},{\"id\":\"80\",\"price_usd\":\"50\",\"percent_change_7d\":\"-10\"}]", 3},
-		{"window_number", "[{\"id\":\"90\",\"price_usd\":\"100\",\"percent_change_24h\":5},{\"id\":\"80\",\"price_usd\":\"50\",\"percent_change_7d\":\"-10\"}]", 3},
+		{"missing", "[{\"id\":\"90\",\"price_usd\":\"100\",\"percent_change_24h\":\"5\"}]", 1},
+		{"duplicate", "[{\"id\":\"90\",\"price_usd\":\"100\"},{\"id\":\"90\",\"price_usd\":\"100\"},{\"id\":\"80\",\"price_usd\":\"50\",\"percent_change_7d\":\"-10\"}]", 1},
+		{"bad_price", "[{\"id\":\"90\",\"price_usd\":\"NaN\",\"percent_change_24h\":\"5\"},{\"id\":\"80\",\"price_usd\":\"50\",\"percent_change_7d\":\"-10\"}]", 1},
+		{"window_null", "[{\"id\":\"90\",\"price_usd\":\"100\",\"percent_change_24h\":null},{\"id\":\"80\",\"price_usd\":\"50\",\"percent_change_7d\":\"-10\"}]", 2},
+		{"window_number", "[{\"id\":\"90\",\"price_usd\":\"100\",\"percent_change_24h\":5},{\"id\":\"80\",\"price_usd\":\"50\",\"percent_change_7d\":\"-10\"}]", 2},
 		{"bad_json", "[", 0},
 	}
 	for _, c := range cases {
@@ -403,7 +501,7 @@ func TestE2EStateAndDryRun(t *testing.T) {
 			t.Fatal("corrupt state table was removed")
 		}
 	})
-	for i, data := range []string{"{}", "null", "[]", "{\"version\":3,\"rules\":{}}", "{\"version\":2,\"rules\":null}", "{\"version\":2,\"rules\":{\"high\":{}}}"} {
+	for i, data := range []string{"{}", "null", "[]", "{\"version\":4,\"rules\":{}}", "{\"version\":3,\"rules\":null}", "{\"version\":3,\"rules\":{\"high\":{}}}"} {
 		t.Run(fmt.Sprintf("corrupt_%d", i), func(t *testing.T) {
 			h := newHarness(t, oneRule)
 			setPostgresTestStateJSON(t, []byte(data))
@@ -465,7 +563,7 @@ func TestE2EStateAndDryRun(t *testing.T) {
 			}
 		}
 		h.run(false)
-		h.sent(5) // The accepted-but-unpersisted first alert can duplicate.
+		h.sent(3) // The accepted-but-unpersisted first alert can duplicate.
 	})
 	t.Run("cancel", func(t *testing.T) {
 		h := newHarness(t, oneRule)
@@ -526,7 +624,7 @@ func TestCLIEnvironment(t *testing.T) {
 	if err := os.WriteFile(invalidConfig, []byte("rules: []"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	setPostgresTestStateJSON(t, []byte(`{"version":3,"rules":{}}`))
+	setPostgresTestStateJSON(t, []byte(`{"version":4,"rules":{}}`))
 	before, exists := postgresTestStateJSON(t)
 	if !exists {
 		t.Fatal("seeded PostgreSQL state row is missing")
@@ -553,14 +651,14 @@ func TestCLIEnvironment(t *testing.T) {
 		dbOverrides         map[string]string
 		stateEnv            *string
 	}{
-		{name: "env_only", config: h.options.ConfigPath, dry: "true", reason: "unsupported state version 3"},
+		{name: "env_only", config: h.options.ConfigPath, dry: "true", reason: "unsupported state version 4"},
 		{name: "config_flag", args: []string{"--config", invalidConfig}, config: h.options.ConfigPath, dry: "true", reason: "nonempty rules list"},
 		{name: "state_flag_removed", args: []string{"--state", "legacy.json"}, config: h.options.ConfigPath, dry: "true", reason: "not defined"},
 		{name: "dry_false_flag", args: []string{"--dry-run=false"}, config: h.options.ConfigPath, dry: "true", reason: "PUSHOVER_APP_TOKEN and PUSHOVER_USER_KEY are required"},
-		{name: "dry_true_flag", args: []string{"--dry-run"}, config: h.options.ConfigPath, dry: "false", reason: "unsupported state version 3"},
+		{name: "dry_true_flag", args: []string{"--dry-run"}, config: h.options.ConfigPath, dry: "false", reason: "unsupported state version 4"},
 		{name: "bad_dry", config: h.options.ConfigPath, dry: "yes", reason: "MARKETWATCH_DRY_RUN"},
 		{name: "empty_dry_is_false", config: h.options.ConfigPath, dry: "", reason: "PUSHOVER_APP_TOKEN and PUSHOVER_USER_KEY are required"},
-		{name: "numeric_true", config: h.options.ConfigPath, dry: "1", reason: "unsupported state version 3"},
+		{name: "numeric_true", config: h.options.ConfigPath, dry: "1", reason: "unsupported state version 4"},
 		{name: "empty_config", config: "", dry: "true", reason: "config path must be nonempty"},
 		{name: "missing_db_host", config: h.options.ConfigPath, dry: "true", reason: "DB_HOST", dbOverrides: map[string]string{"DB_HOST": ""}},
 		{name: "missing_db_name", config: h.options.ConfigPath, dry: "true", reason: "DB_NAME", dbOverrides: map[string]string{"DB_NAME": ""}},
@@ -570,7 +668,7 @@ func TestCLIEnvironment(t *testing.T) {
 		{name: "invalid_db_sslmode", config: h.options.ConfigPath, dry: "true", reason: "DB_SSLMODE must be disable, require, verify-ca or verify-full", dbOverrides: map[string]string{"DB_SSLMODE": "insecure"}},
 		{name: "bad_database_password", config: h.options.ConfigPath, dry: "true", reason: "PostgreSQL connect failed", dbOverrides: map[string]string{"DB_PASSWORD": "marketwatch-e2e-wrong-password"}},
 		{name: "state_env_removed", config: h.options.ConfigPath, dry: "true", reason: "MARKETWATCH_STATE is no longer supported", stateEnv: strPtr("")},
-		{name: "flag_overrides_bad_env", args: []string{"--config", h.options.ConfigPath, "--dry-run"}, config: "", dry: "bad", reason: "unsupported state version 3"},
+		{name: "flag_overrides_bad_env", args: []string{"--config", h.options.ConfigPath, "--dry-run"}, config: "", dry: "bad", reason: "unsupported state version 4"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -644,7 +742,7 @@ func TestE2ECaseVariantState(t *testing.T) {
 			rule := document["rules"].(map[string]any)[ruleKey("90", "absolute-change", 5, "24h")].(map[string]any)
 			switch variant {
 			case "version":
-				document["Version"] = 2
+				document["Version"] = stateVersion
 			case "active":
 				rule["Active"] = false
 			case "pending":
@@ -667,7 +765,7 @@ func TestE2ECaseVariantState(t *testing.T) {
 }
 
 func TestE2EInvalidMinimalState(t *testing.T) {
-	for _, variant := range []string{"legacy", "missing_active", "null_active", "unknown_rule", "unknown_pending", "missing_time", "empty_message"} {
+	for _, variant := range []string{"missing_active", "null_active", "unknown_rule", "unknown_pending", "missing_time", "empty_message", "title_without_group", "group_without_title", "missing_title_and_group", "null_group", "empty_group"} {
 		t.Run(variant, func(t *testing.T) {
 			h := newHarness(t, oneRule)
 			h.pushStatus = 503
@@ -683,10 +781,6 @@ func TestE2EInvalidMinimalState(t *testing.T) {
 			rule := state["rules"].(map[string]any)[ruleKey("90", "absolute-change", 5, "24h")].(map[string]any)
 			pending := rule["pending"].(map[string]any)
 			switch variant {
-			case "legacy":
-				state["version"] = 1
-				rule["checked"] = true
-				pending["title"] = "Marketwatch"
 			case "missing_active":
 				delete(rule, "active")
 			case "null_active":
@@ -699,6 +793,17 @@ func TestE2EInvalidMinimalState(t *testing.T) {
 				delete(pending, "observed_at")
 			case "empty_message":
 				pending["message"] = ""
+			case "title_without_group":
+				delete(pending, "group_id")
+			case "group_without_title":
+				delete(pending, "title")
+			case "missing_title_and_group":
+				delete(pending, "title")
+				delete(pending, "group_id")
+			case "null_group":
+				pending["title"], pending["group_id"] = nil, nil
+			case "empty_group":
+				pending["title"], pending["group_id"] = "", ""
 			}
 			data, err := json.MarshalIndent(state, "", "  ")
 			if err != nil {
@@ -710,14 +815,11 @@ func TestE2EInvalidMinimalState(t *testing.T) {
 				t.Fatal("corrupt state row is missing")
 			}
 			gets := h.gets
-			runErr := h.run(true)
+			h.run(true)
 			h.sent(1)
 			after, exists := postgresTestStateJSON(t)
 			if h.gets != gets || !exists || !postgresTestJSONEqual(t, before, after) {
-				t.Fatal("invalid or legacy state used network or was overwritten")
-			}
-			if variant == "legacy" && !strings.Contains(runErr.Error(), "unsupported state version 1") {
-				t.Fatal("legacy state rejected without a clear version error")
+				t.Fatal("invalid state used network or was overwritten")
 			}
 		})
 	}
@@ -729,18 +831,18 @@ func TestE2ECombinedFailureAndRestart(t *testing.T) {
 	h.market = `[{"id":"90","price_usd":"100","percent_change_24h":"5"},{"id":"80","price_usd":"50","percent_change_7d":null}]`
 	h.pushStatus = 503
 	h.run(true)
-	h.sent(3)
+	h.sent(2)
 	if r := h.state().Rules[ruleKey("80", "absolute-change", 10, "7d")]; r.Active || r.Pending != nil {
 		t.Fatal("missing 7d changed the rule")
 	}
 	h.now = h.now.Add(time.Hour)
 	h.prices("99", "4", "0", "51", "0", "-9")
 	h.run(true)
-	h.sent(6)
+	h.sent(4)
 	h.now = h.now.Add(time.Hour)
 	h.prices("101", "6", "0", "49", "0", "-10")
 	h.run(true)
-	h.sent(10)
+	h.sent(6)
 	// Restart runner, retaining only the durable state.
 	logger := h.runner.Logger
 	coinURL, pushURL := h.runner.coinURL, h.runner.pushURL
@@ -750,10 +852,10 @@ func TestE2ECombinedFailureAndRestart(t *testing.T) {
 	h.pushStatus = 200
 	h.now = h.now.Add(30 * time.Minute)
 	h.run(false)
-	h.sent(14)
+	h.sent(8)
 	h.config("rules:\n - {coin: \"90\", above: 100}\n - {coin: \"90\", threshold: 7, window: 24h}\n")
 	h.run(false)
-	h.sent(14)
+	h.sent(8)
 	if len(h.state().Rules) != 2 || h.state().Rules[ruleKey("90", "absolute-change", 7, "24h")].Active {
 		t.Fatal("definition reconciliation after restart")
 	}
@@ -797,7 +899,7 @@ func TestE2EBidirectionalMovement(t *testing.T) {
 			t.Fatalf("step %d: wrong activity", i)
 		}
 	}
-	if got := h.messages[1].Get("message"); got != "BTC 100 USD · −3% in 24h (threshold ±3%)" {
+	if got := h.messages[1].Get("message"); got != "24h −3%" {
 		t.Fatalf("negative change alert: %q", got)
 	}
 }
@@ -832,14 +934,14 @@ func TestE2EPriceAndPercentageEpisodes(t *testing.T) {
 		sent            int
 		high, low, move bool
 	}{
-		{"86500.25", "3", 2, true, false, true},
-		{"90000", "-3", 2, true, false, true},
-		{"85570", "2.5", 2, true, false, true},
-		{"85569", "2.49", 2, false, false, false},
-		{"80000", "-3", 4, false, true, true},
-		{"80400", "0", 4, false, true, false},
-		{"80401", "0", 4, false, false, false},
-		{"86000", "3", 6, true, false, true},
+		{"86500.25", "3", 1, true, false, true},
+		{"90000", "-3", 1, true, false, true},
+		{"85570", "2.5", 1, true, false, true},
+		{"85569", "2.49", 1, false, false, false},
+		{"80000", "-3", 2, false, true, true},
+		{"80400", "0", 2, false, true, false},
+		{"80401", "0", 2, false, false, false},
+		{"86000", "3", 3, true, false, true},
 	} {
 		h.now = h.now.Add(time.Minute)
 		h.prices(step.price, step.change, "0", "50", "0", "0")
@@ -850,25 +952,34 @@ func TestE2EPriceAndPercentageEpisodes(t *testing.T) {
 			t.Fatalf("step %d: wrong activity", i)
 		}
 	}
-	if got := h.messages[0].Get("message"); got != "BTC 86,500.25 USD (threshold ≥ 86,000)" {
+	if got := h.messages[0].Get("title"); got != "BTC | 86,500.25 USD" {
 		t.Fatalf("above alert: %q", got)
 	}
-	if got := h.messages[2].Get("message"); got != "BTC 80,000 USD (threshold ≤ 80,000)" {
+	if got := h.messages[1].Get("title"); got != "BTC | 80,000 USD" {
 		t.Fatalf("below alert: %q", got)
 	}
 	// Changing the high definition preserves the unchanged percentage activity.
-	before := h.state().Rules[moveKey].Fingerprint
 	h.config(`rules:
  - {coin: btc, threshold: 4, window: 24h}
  - {coin: btc, below: 80000}
  - {coin: btc, threshold: 3, window: 24h}
 `)
 	h.run(false)
-	h.sent(6)
+	h.sent(3)
 	state := h.state()
 	newMoveKey := ruleKey("90", "absolute-change", 4, "24h")
-	if state.Rules[newMoveKey].Active || !state.Rules[moveKey].Active || state.Rules[moveKey].Fingerprint != before || !strings.Contains(h.logs.String(), "rule_removed") || strings.Contains(h.logs.String(), "rule_reset") {
+	if state.Rules[newMoveKey].Active || !state.Rules[moveKey].Active || !strings.Contains(h.logs.String(), "rule_removed") {
 		t.Fatal("condition reconciliation")
+	}
+}
+
+func TestE2EPriceAlertKeepsTinyPriceVisible(t *testing.T) {
+	h := newHarness(t, "rules:\n - {coin: btc, below: 1e-250}\n")
+	h.prices("1e-260", "0", "0", "50", "0", "0")
+	h.run(false)
+	h.sent(1)
+	if got := h.messages[0].Get("title"); got != "BTC | 1e-260 USD" {
+		t.Fatalf("unexpected tiny price title: %q", got)
 	}
 }
 

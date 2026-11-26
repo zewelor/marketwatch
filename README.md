@@ -31,11 +31,25 @@ Pass secrets through your environment. Optionally pass
 `--env HEALTHCHECKS_PING_URL` to monitor scheduled runs.
 
 Schedule `marketwatch check` without overlapping runs. Collect its JSON logs
-and treat a nonzero exit as a failed check. Back up `public.marketwatch_state`
-to preserve alert state across recovery.
+and treat a nonzero exit as a failed check. See `rule_evaluated` for the condition
+and threshold. For grouped alerts, use `group_id` to match a send log to its
+triggering evaluations. Back up `public.marketwatch_state` to preserve alert
+state across recovery.
 
 With Go 1.27.4, run from source with
 `go run ./cmd/marketwatch check --config config.yaml --dry-run`.
+
+### Upgrade from state version 2
+
+Version 3 requires a fresh state table. Pause scheduled checks and drop
+`public.marketwatch_state` in the Marketwatch database before starting the new
+version. The first non-dry run recreates it. Resetting the table discards queued
+notifications and alert activity, so rules already meeting their conditions
+can alert again on that first run.
+
+```sql
+DROP TABLE IF EXISTS public.marketwatch_state;
+```
 
 ## Rules
 
@@ -48,10 +62,8 @@ rules:
 
 `threshold` alerts on a rise or fall of at least that percentage over `24h` or
 `7d`. `above` and `below` are inclusive USD limits. Use a quoted CoinLore ID
-when a symbol is ambiguous.
-
-Alerts group thousands with commas in prices and price thresholds, as in
-`BTC 86,500.25 USD (threshold ≥ 86,000)`.
+when a symbol is ambiguous. Rules triggered by the same coin quote share one
+Pushover notification, dated at the original observation time.
 
 After firing, a rule stays quiet until it rearms. Percentage rules rearm when
 the absolute change falls below the threshold minus 0.5 percentage points,
